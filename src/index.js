@@ -66,7 +66,47 @@ if (url.pathname === "/api/debug-story") {
   }
 }
 
+if (url.pathname === "/api/debug-htmx") {
+  const testUrl =
+    "https://www.asianfanfics.com/story/view/1733952/shanti-shanti-shanti";
 
+  try {
+    const response = await fetch(testUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; FanficKindle/1.0)"
+      }
+    });
+
+    const html = await response.text();
+
+    const matches = [
+      ...html.matchAll(
+        /<(?:[^>]+)\s(hx-(?:get|post|trigger|target|swap))=["']([^"']+)["'][^>]*>/gi
+      )
+    ];
+
+    const items = matches.map(match => ({
+      attribute: match[1],
+      value: match[2]
+    }));
+
+    return json({
+      count: items.length,
+      items
+    });
+
+  } catch (error) {
+    return json(
+      {
+        success: false,
+        error: error.message
+      },
+      500
+    );
+  }
+}
+    
     
     if (url.pathname === "/api/stories" && request.method === "GET") {
       const { results } = await env.DB.prepare(`
