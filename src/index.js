@@ -5,134 +5,39 @@ import {
 
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
+    const url =
+      new URL(
+        request.url
+      );
 
 
     // ========================================
-    // TEST: Asianfanfics logged-in page
-    // ========================================
-
-    if (url.pathname === "/api/debug-login") {
-      const testUrl =
-        "https://www.asianfanfics.com/story/view/1733952/shanti-shanti-shanti";
-
-      try {
-        const response = await fetch(
-          testUrl,
-          {
-            headers: {
-              "User-Agent":
-                "Mozilla/5.0 (compatible; FanficKindle/1.0)",
-
-              "Cookie":
-                env.AFF_COOKIE
-            }
-          }
-        );
-
-        const html =
-          await response.text();
-
-
-        const titleMatch =
-          html.match(
-            /<title>([\s\S]*?)<\/title>/i
-          );
-
-
-        const title =
-          titleMatch
-            ? titleMatch[1].trim()
-            : null;
-
-
-        const links = [
-          ...html.matchAll(
-            /href=["']([^"']+)["']/gi
-          )
-        ]
-          .map(
-            match => match[1]
-          )
-          .filter(
-            href =>
-              href.includes("story") ||
-              href.includes("chapter")
-          );
-
-
-        const uniqueLinks =
-          [...new Set(links)];
-
-
-        return json({
-          success:
-            response.ok,
-
-          status:
-            response.status,
-
-          html_length:
-            html.length,
-
-          title,
-
-          still_age_gate:
-            html.includes(
-              "Are you over 18?"
-            ),
-
-          has_story_meta:
-            html.includes(
-              'id="storyViewMeta"'
-            ),
-
-          has_foreword:
-            html.includes(
-              "Foreword"
-            ),
-
-          link_count:
-            uniqueLinks.length,
-
-          links:
-            uniqueLinks.slice(
-              0,
-              80
-            )
-        });
-
-      } catch (error) {
-        return json(
-          {
-            success: false,
-            error: error.message
-          },
-          500
-        );
-      }
-    }
-
-
-    // ========================================
-    // GET: Load recent 10 stories
+    // GET recent 10 stories
     // ========================================
 
     if (
-      url.pathname === "/api/stories" &&
-      request.method === "GET"
+      url.pathname ===
+        "/api/stories" &&
+      request.method ===
+        "GET"
     ) {
       try {
         const { results } =
-          await env.DB.prepare(`
-            SELECT *
-            FROM stories
-            ORDER BY datetime(accessed_at) DESC
-            LIMIT 10
-          `).all();
+          await env.DB
+            .prepare(`
+              SELECT *
+              FROM stories
+              ORDER BY
+                datetime(
+                  accessed_at
+                ) DESC
+              LIMIT 10
+            `)
+            .all();
 
-
-        return json(results);
+        return json(
+          results
+        );
 
       } catch (error) {
         return json(
@@ -147,17 +52,18 @@ export default {
 
 
     // ========================================
-    // POST: Add story
+    // POST add story
     // ========================================
 
     if (
-      url.pathname === "/api/stories" &&
-      request.method === "POST"
+      url.pathname ===
+        "/api/stories" &&
+      request.method ===
+        "POST"
     ) {
       try {
         const body =
           await request.json();
-
 
         const storyUrl =
           (
@@ -192,44 +98,72 @@ export default {
         }
 
 
+        const info =
+          await fetchStoryInfo(
+            storyUrl,
+            env.AFF_COOKIE
+          );
+
+
         const now =
           new Date()
             .toISOString();
 
 
-        await env.DB.prepare(`
-          INSERT INTO stories (
-            story_url,
-            title,
-            accessed_at,
-            last_updated
-          )
+        await env.DB
+          .prepare(`
+            INSERT INTO stories (
+              story_url,
+              title,
+              chapter_count,
+              accessed_at,
+              last_updated
+            )
 
-          VALUES (?, ?, ?, ?)
+            VALUES (
+              ?,
+              ?,
+              ?,
+              ?,
+              ?
+            )
 
-          ON CONFLICT(story_url)
+            ON CONFLICT(
+              story_url
+            )
 
-          DO UPDATE SET
+            DO UPDATE SET
 
-            accessed_at =
-              excluded.accessed_at,
+              title =
+                excluded.title,
 
-            last_updated =
-              excluded.last_updated
-        `)
+              chapter_count =
+                excluded.chapter_count,
+
+              accessed_at =
+                excluded.accessed_at,
+
+              last_updated =
+                excluded.last_updated
+          `)
+
           .bind(
             storyUrl,
-            temporaryTitle(
-              storyUrl
-            ),
+            info.title,
+            info.chapter_count,
             now,
             now
           )
+
           .run();
 
 
         return json({
-          success: true
+          success: true,
+          title:
+            info.title,
+          chapter_count:
+            info.chapter_count
         });
 
       } catch (error) {
@@ -245,14 +179,138 @@ export default {
 
 
     // ========================================
-    // DELETE: Remove story
+    // POST update story
+    // ========================================
+
+    if (
+      url.pathname.match(
+        /^\/api\/stories\/\d+\/update$/
+      ) &&
+      request.method ===
+        "POST"
+    ) {
+      try {
+        const parts =
+          url.pathname
+            .split("/");
+
+        const id =
+          parts[3];
+
+
+        const existing =
+          await env.DB
+            .prepare(`
+              SELECT *
+              FROM stories
+              WHERE id = ?
+            `)
+            .bind(id)
+            .first();
+
+
+        if (!existing) {
+          return json(
+            {
+              error:
+                "Story not found."
+            },
+            404
+          );
+        }
+
+
+        const info =
+          await fetchStoryInfo(
+            existing.story_url,
+            env.AFF_COOKIE
+          );
+
+
+        const oldCount =
+          Number(
+            existing.chapter_count ||
+            0
+          );
+
+
+        const newCount =
+          Number(
+            info.chapter_count ||
+            0
+          );
+
+
+        const added =
+          Math.max(
+            0,
+            newCount -
+            oldCount
+          );
+
+
+        const now =
+          new Date()
+            .toISOString();
+
+
+        await env.DB
+          .prepare(`
+            UPDATE stories
+
+            SET
+              title = ?,
+              chapter_count = ?,
+              accessed_at = ?,
+              last_updated = ?
+
+            WHERE id = ?
+          `)
+
+          .bind(
+            info.title,
+            newCount,
+            now,
+            now,
+            id
+          )
+
+          .run();
+
+
+        return json({
+          success: true,
+          title:
+            info.title,
+          old_count:
+            oldCount,
+          new_count:
+            newCount,
+          added
+        });
+
+      } catch (error) {
+        return json(
+          {
+            error:
+              error.message
+          },
+          500
+        );
+      }
+    }
+
+
+    // ========================================
+    // DELETE story
     // ========================================
 
     if (
       url.pathname.startsWith(
         "/api/stories/"
       ) &&
-      request.method === "DELETE"
+      request.method ===
+        "DELETE"
     ) {
       try {
         const id =
@@ -261,12 +319,11 @@ export default {
             .pop();
 
 
-        await env.DB.prepare(
-          `
-          DELETE FROM stories
-          WHERE id = ?
-          `
-        )
+        await env.DB
+          .prepare(`
+            DELETE FROM stories
+            WHERE id = ?
+          `)
           .bind(id)
           .run();
 
@@ -288,7 +345,7 @@ export default {
 
 
     // ========================================
-    // Main webpage
+    // Main page
     // ========================================
 
     return new Response(
@@ -304,23 +361,16 @@ export default {
 };
 
 
-// ========================================
-// JSON helper
-// ========================================
-
 function json(
   data,
   status = 200
 ) {
   return new Response(
     JSON.stringify(
-      data,
-      null,
-      2
+      data
     ),
     {
       status,
-
       headers: {
         "content-type":
           "application/json;charset=UTF-8"
@@ -330,61 +380,6 @@ function json(
 }
 
 
-// ========================================
-// Temporary title
-// ========================================
-
-function temporaryTitle(
-  storyUrl
-) {
-  try {
-    const u =
-      new URL(storyUrl);
-
-
-    const parts =
-      u.pathname
-        .split("/")
-        .filter(Boolean);
-
-
-    const storyIndex =
-      parts.indexOf(
-        "view"
-      );
-
-
-    if (
-      storyIndex !== -1 &&
-      parts[
-        storyIndex + 1
-      ]
-    ) {
-      return (
-        "Asianfanfics Story #" +
-        parts[
-          storyIndex + 1
-        ]
-      );
-    }
-
-
-    return (
-      "Asianfanfics Story"
-    );
-
-  } catch {
-    return (
-      "Asianfanfics Story"
-    );
-  }
-}
-
-
-// ========================================
-// Webpage
-// ========================================
-
 function page() {
   return `<!DOCTYPE html>
 
@@ -392,279 +387,259 @@ function page() {
 
 <head>
 
-  <meta charset="UTF-8">
+<meta charset="UTF-8">
 
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1.0"
+>
 
-  <title>
-    Fanfic Kindle
-  </title>
+<title>
+  Fanfic Kindle
+</title>
 
 
-  <style>
+<style>
 
-    * {
-      box-sizing: border-box;
-    }
+* {
+  box-sizing:
+    border-box;
+}
 
+body {
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
 
-    body {
+  max-width:
+    620px;
 
-      font-family:
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
+  margin:
+    0 auto;
 
-      max-width: 620px;
+  padding:
+    28px 18px 60px;
 
-      margin: 0 auto;
+  background:
+    #f6f6f6;
 
-      padding:
-        28px 18px 60px;
+  color:
+    #202020;
+}
 
-      background:
-        #f6f6f6;
+h1 {
+  font-size:
+    36px;
 
-      color:
-        #202020;
+  margin:
+    0 0 6px;
+}
 
-    }
+h2 {
+  margin-top:
+    38px;
+}
 
+.subtitle {
+  color:
+    #777;
 
-    h1 {
+  font-size:
+    18px;
 
-      font-size:
-        36px;
+  margin-bottom:
+    28px;
+}
 
-      margin:
-        0 0 6px;
+.card {
+  background:
+    white;
 
-    }
+  border-radius:
+    16px;
 
+  padding:
+    18px;
 
-    h2 {
+  margin-bottom:
+    14px;
 
-      margin-top:
-        38px;
+  box-shadow:
+    0 3px 14px
+    rgba(
+      0,
+      0,
+      0,
+      0.05
+    );
+}
 
-    }
+input {
+  width:
+    100%;
 
+  padding:
+    15px;
 
-    .subtitle {
+  border:
+    1px solid #ddd;
 
-      color:
-        #777;
+  border-radius:
+    11px;
 
-      font-size:
-        18px;
+  font-size:
+    16px;
 
-      margin-bottom:
-        28px;
+  margin-bottom:
+    12px;
+}
 
-    }
+button {
+  border:
+    0;
 
+  border-radius:
+    10px;
 
-    .card {
+  padding:
+    13px 16px;
 
-      background:
-        white;
+  font-size:
+    16px;
 
-      border-radius:
-        16px;
+  cursor:
+    pointer;
+}
 
-      padding:
-        18px;
+.primary {
+  width:
+    100%;
 
-      margin-bottom:
-        14px;
+  background:
+    #111;
 
-      box-shadow:
-        0 3px 14px
-        rgba(
-          0,
-          0,
-          0,
-          0.05
-        );
+  color:
+    white;
+}
 
-    }
+.story-title {
+  font-size:
+    19px;
 
+  font-weight:
+    650;
 
-    input {
+  margin-bottom:
+    6px;
+}
 
-      width:
-        100%;
+.story-meta {
+  color:
+    #666;
 
-      padding:
-        15px;
+  font-size:
+    14px;
 
-      border:
-        1px solid #ddd;
+  margin-bottom:
+    14px;
+}
 
-      border-radius:
-        11px;
+.story-url {
+  font-size:
+    12px;
 
-      font-size:
-        16px;
+  color:
+    #999;
 
-      margin-bottom:
-        12px;
+  overflow:
+    hidden;
 
-    }
+  text-overflow:
+    ellipsis;
 
+  white-space:
+    nowrap;
 
-    button {
+  margin-bottom:
+    14px;
+}
 
-      border:
-        0;
+.buttons {
+  display:
+    flex;
 
-      border-radius:
-        10px;
+  gap:
+    8px;
+}
 
-      padding:
-        13px 16px;
+.update {
+  flex:
+    1;
 
-      font-size:
-        16px;
+  background:
+    #111;
 
-      cursor:
-        pointer;
+  color:
+    white;
+}
 
-    }
+.delete {
+  background:
+    #ececec;
 
+  color:
+    #333;
+}
 
-    .primary {
+.empty {
+  color:
+    #888;
 
-      width:
-        100%;
+  text-align:
+    center;
 
-      background:
-        #111;
+  padding:
+    30px;
+}
 
-      color:
-        white;
+.message {
+  margin-top:
+    12px;
 
-    }
+  font-size:
+    14px;
+}
 
+.error {
+  color:
+    #b42318;
+}
 
-    .story-title {
+.success {
+  color:
+    #18794e;
+}
 
-      font-size:
-        18px;
+.update-result {
+  margin-top:
+    12px;
 
-      font-weight:
-        650;
+  padding:
+    12px;
 
-      margin-bottom:
-        7px;
+  border-radius:
+    9px;
 
-    }
+  background:
+    #f3f3f3;
 
+  font-size:
+    14px;
+}
 
-    .story-url {
-
-      font-size:
-        13px;
-
-      color:
-        #777;
-
-      overflow:
-        hidden;
-
-      text-overflow:
-        ellipsis;
-
-      white-space:
-        nowrap;
-
-      margin-bottom:
-        14px;
-
-    }
-
-
-    .buttons {
-
-      display:
-        flex;
-
-      gap:
-        8px;
-
-    }
-
-
-    .update {
-
-      flex:
-        1;
-
-      background:
-        #111;
-
-      color:
-        white;
-
-    }
-
-
-    .delete {
-
-      background:
-        #ececec;
-
-      color:
-        #333;
-
-    }
-
-
-    .empty {
-
-      color:
-        #888;
-
-      text-align:
-        center;
-
-      padding:
-        30px;
-
-    }
-
-
-    .message {
-
-      margin-top:
-        12px;
-
-      font-size:
-        14px;
-
-    }
-
-
-    .error {
-
-      color:
-        #b42318;
-
-    }
-
-
-    .success {
-
-      color:
-        #18794e;
-
-    }
-
-  </style>
+</style>
 
 </head>
 
@@ -672,348 +647,437 @@ function page() {
 <body>
 
 
-  <h1>
-    📚 Fanfic Kindle
-  </h1>
+<h1>
+  📚 Fanfic Kindle
+</h1>
 
 
-  <div class="subtitle">
-    Asianfanfics → Kindle
+<div class="subtitle">
+  Asianfanfics → Kindle
+</div>
+
+
+<div class="card">
+
+  <input
+    id="storyUrl"
+    type="url"
+    placeholder="Paste Asianfanfics story URL"
+  >
+
+  <button
+    class="primary"
+    onclick="addStory()"
+  >
+    Add Story
+  </button>
+
+  <div
+    id="message"
+    class="message"
+  ></div>
+
+</div>
+
+
+<h2>
+  My Library
+</h2>
+
+
+<div id="library">
+
+  <div class="card empty">
+    Loading...
   </div>
 
-
-  <div class="card">
-
-    <input
-      id="storyUrl"
-      type="url"
-      placeholder="Paste Asianfanfics story URL"
-    >
-
-
-    <button
-      class="primary"
-      onclick="addStory()"
-    >
-      Add Story
-    </button>
-
-
-    <div
-      id="message"
-      class="message"
-    ></div>
-
-  </div>
-
-
-  <h2>
-    My Library
-  </h2>
-
-
-  <div id="library">
-
-    <div class="card empty">
-      Loading...
-    </div>
-
-  </div>
+</div>
 
 
 <script>
 
 
-  async function loadStories() {
+async function loadStories() {
 
-    const library =
-      document.getElementById(
-        "library"
+  const library =
+    document.getElementById(
+      "library"
+    );
+
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/stories"
       );
 
 
-    try {
-
-      const response =
-        await fetch(
-          "/api/stories"
-        );
+    const stories =
+      await response.json();
 
 
-      const stories =
-        await response.json();
-
-
-      if (!response.ok) {
-
-        library.innerHTML =
-          '<div class="card empty">' +
-          'Failed to load library.' +
-          '</div>';
-
-        return;
-
-      }
-
-
-      if (!stories.length) {
-
-        library.innerHTML =
-          '<div class="card empty">' +
-          'No stories yet.' +
-          '</div>';
-
-        return;
-
-      }
-
-
-      library.innerHTML =
-        stories
-          .map(
-            story => \`
-
-          <div class="card">
-
-            <div class="story-title">
-
-              \${escapeHtml(
-                story.title ||
-                "Untitled Story"
-              )}
-
-            </div>
-
-
-            <div class="story-url">
-
-              \${escapeHtml(
-                story.story_url
-              )}
-
-            </div>
-
-
-            <div class="buttons">
-
-
-              <button
-
-                class="update"
-
-                onclick="
-                  updateStory(
-                    \${story.id}
-                  )
-                "
-
-              >
-
-                Update
-
-              </button>
-
-
-              <button
-
-                class="delete"
-
-                onclick="
-                  deleteStory(
-                    \${story.id}
-                  )
-                "
-
-              >
-
-                Delete
-
-              </button>
-
-
-            </div>
-
-          </div>
-
-        \`
-          )
-          .join("");
-
-
-    } catch (error) {
+    if (!response.ok) {
 
       library.innerHTML =
         '<div class="card empty">' +
         'Failed to load library.' +
         '</div>';
 
+      return;
     }
+
+
+    if (!stories.length) {
+
+      library.innerHTML =
+        '<div class="card empty">' +
+        'No stories yet.' +
+        '</div>';
+
+      return;
+    }
+
+
+    library.innerHTML =
+      stories
+        .map(
+          story => \`
+
+<div class="card">
+
+  <div class="story-title">
+
+    \${escapeHtml(
+      story.title ||
+      "Untitled Story"
+    )}
+
+  </div>
+
+
+  <div class="story-meta">
+
+    \${Number(
+      story.chapter_count ||
+      0
+    )}
+    chapters
+
+  </div>
+
+
+  <div class="story-url">
+
+    \${escapeHtml(
+      story.story_url
+    )}
+
+  </div>
+
+
+  <div class="buttons">
+
+    <button
+      class="update"
+      onclick="
+        updateStory(
+          \${story.id}
+        )
+      "
+    >
+      Update
+    </button>
+
+
+    <button
+      class="delete"
+      onclick="
+        deleteStory(
+          \${story.id}
+        )
+      "
+    >
+      Delete
+    </button>
+
+  </div>
+
+
+  <div
+    id="result-\${story.id}"
+  ></div>
+
+</div>
+
+\`
+        )
+        .join("");
+
+
+  } catch (error) {
+
+    library.innerHTML =
+      '<div class="card empty">' +
+      'Failed to load library.' +
+      '</div>';
 
   }
 
+}
 
 
-  async function addStory() {
 
-    const input =
-      document.getElementById(
-        "storyUrl"
+async function addStory() {
+
+  const input =
+    document.getElementById(
+      "storyUrl"
+    );
+
+
+  const message =
+    document.getElementById(
+      "message"
+    );
+
+
+  const storyUrl =
+    input.value.trim();
+
+
+  message.textContent =
+    "Reading story...";
+
+
+  message.className =
+    "message";
+
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/stories",
+        {
+          method:
+            "POST",
+
+          headers: {
+            "content-type":
+              "application/json"
+          },
+
+          body:
+            JSON.stringify({
+              story_url:
+                storyUrl
+            })
+        }
       );
 
 
-    const message =
-      document.getElementById(
-        "message"
-      );
+    const result =
+      await response.json();
 
 
-    const storyUrl =
-      input.value.trim();
-
-
-    message.textContent =
-      "";
-
-
-    try {
-
-      const response =
-        await fetch(
-          "/api/stories",
-          {
-            method:
-              "POST",
-
-            headers: {
-              "content-type":
-                "application/json"
-            },
-
-            body:
-              JSON.stringify({
-                story_url:
-                  storyUrl
-              })
-          }
-        );
-
-
-      const result =
-        await response.json();
-
-
-      if (!response.ok) {
-
-        message.className =
-          "message error";
-
-
-        message.textContent =
-          result.error ||
-          "Something went wrong.";
-
-
-        return;
-
-      }
-
-
-      message.className =
-        "message success";
-
-
-      message.textContent =
-        "Story saved.";
-
-
-      input.value =
-        "";
-
-
-      await loadStories();
-
-
-    } catch (error) {
+    if (!response.ok) {
 
       message.className =
         "message error";
 
 
       message.textContent =
+        result.error ||
         "Something went wrong.";
 
-    }
-
-  }
-
-
-
-  async function updateStory(
-    id
-  ) {
-
-    alert(
-      "Update is not enabled yet. " +
-      "We are currently testing " +
-      "Asianfanfics login access."
-    );
-
-  }
-
-
-
-  async function deleteStory(
-    id
-  ) {
-
-    const confirmed =
-      confirm(
-        "Remove this story " +
-        "from your library?"
-      );
-
-
-    if (!confirmed) {
       return;
     }
 
 
-    await fetch(
-      "/api/stories/" + id,
-      {
-        method:
-          "DELETE"
-      }
-    );
+    message.className =
+      "message success";
+
+
+    message.textContent =
+      result.title +
+      " saved — " +
+      result.chapter_count +
+      " chapters.";
+
+
+    input.value =
+      "";
 
 
     await loadStories();
 
+
+  } catch (error) {
+
+    message.className =
+      "message error";
+
+
+    message.textContent =
+      "Something went wrong.";
+
   }
 
+}
 
 
-  function escapeHtml(
-    value
-  ) {
 
-    const div =
-      document.createElement(
-        "div"
+async function updateStory(
+  id
+) {
+
+  const resultBox =
+    document.getElementById(
+      "result-" + id
+    );
+
+
+  resultBox.innerHTML =
+    '<div class="update-result">' +
+    'Checking Asianfanfics...' +
+    '</div>';
+
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/stories/" +
+        id +
+        "/update",
+        {
+          method:
+            "POST"
+        }
       );
 
 
-    div.textContent =
-      value || "";
+    const result =
+      await response.json();
 
 
-    return div.innerHTML;
+    if (!response.ok) {
+
+      resultBox.innerHTML =
+        '<div class="update-result">' +
+        escapeHtml(
+          result.error ||
+          "Update failed."
+        ) +
+        '</div>';
+
+      return;
+    }
+
+
+    if (
+      result.added > 0
+    ) {
+
+      resultBox.innerHTML =
+        '<div class="update-result">' +
+        '✓ ' +
+        result.added +
+        ' new chapter' +
+        (
+          result.added === 1
+            ? ''
+            : 's'
+        ) +
+        ' found.<br>' +
+        result.old_count +
+        ' → ' +
+        result.new_count +
+        ' chapters' +
+        '</div>';
+
+    } else {
+
+      resultBox.innerHTML =
+        '<div class="update-result">' +
+        '✓ Already up to date — ' +
+        result.new_count +
+        ' chapters.' +
+        '</div>';
+
+    }
+
+
+    await loadStories();
+
+
+  } catch (error) {
+
+    resultBox.innerHTML =
+      '<div class="update-result">' +
+      'Update failed.' +
+      '</div>';
 
   }
 
+}
 
 
-  loadStories();
+
+async function deleteStory(
+  id
+) {
+
+  const confirmed =
+    confirm(
+      "Remove this story " +
+      "from your library?"
+    );
+
+
+  if (!confirmed) {
+    return;
+  }
+
+
+  await fetch(
+    "/api/stories/" +
+    id,
+    {
+      method:
+        "DELETE"
+    }
+  );
+
+
+  await loadStories();
+
+}
+
+
+
+function escapeHtml(
+  value
+) {
+
+  const div =
+    document.createElement(
+      "div"
+    );
+
+
+  div.textContent =
+    value || "";
+
+
+  return div.innerHTML;
+
+}
+
+
+
+loadStories();
 
 
 </script>
