@@ -46,6 +46,9 @@ export default {
             item =>
               item.includes(
                 "/htmx/story/"
+              ) ||
+              item.includes(
+                "/htmx/chapter/"
               )
           );
 
