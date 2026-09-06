@@ -156,6 +156,99 @@ if (url.pathname === "/api/debug-htmx") {
     );
   }
 }   
+
+    if (url.pathname === "/api/debug-verified") {
+  const testUrl =
+    "https://www.asianfanfics.com/story/view/1733952/shanti-shanti-shanti";
+
+  try {
+    // Step 1: tell Asianfanfics that the user confirmed 18+
+    const verifyResponse = await fetch(
+      "https://www.asianfanfics.com/htmx/story/verify_age",
+      {
+        method: "GET",
+        redirect: "manual",
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (compatible; FanficKindle/1.0)",
+          "Referer": testUrl
+        }
+      }
+    );
+
+    const setCookie =
+      verifyResponse.headers.get("set-cookie");
+
+    if (!setCookie) {
+      return json({
+        success: false,
+        step: "verify_age",
+        verify_status: verifyResponse.status,
+        error: "No cookie was returned."
+      });
+    }
+
+    // We only need the actual cookie value,
+    // not Path / Max-Age / SameSite etc.
+    const cookie =
+      setCookie.split(";")[0];
+
+    // Step 2: request the story again using the age cookie
+    const storyResponse = await fetch(
+      testUrl,
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (compatible; FanficKindle/1.0)",
+          "Cookie": cookie
+        }
+      }
+    );
+
+    const html =
+      await storyResponse.text();
+
+    // Collect links after passing the age gate
+    const links = [
+      ...html.matchAll(
+        /href=["']([^"']+)["']/gi
+      )
+    ]
+      .map(match => match[1])
+      .filter(href =>
+        href.includes("story") ||
+        href.includes("chapter")
+      );
+
+    return json({
+      success: storyResponse.ok,
+      verify_status: verifyResponse.status,
+      story_status: storyResponse.status,
+      html_length: html.length,
+
+      still_age_gate:
+        html.includes("Are you over 18?"),
+
+      has_foreword:
+        html.includes("Foreword"),
+
+      link_count:
+        [...new Set(links)].length,
+
+      links:
+        [...new Set(links)].slice(0, 50)
+    });
+
+  } catch (error) {
+    return json(
+      {
+        success: false,
+        error: error.message
+      },
+      500
+    );
+  }
+}
     
     if (url.pathname === "/api/stories" && request.method === "GET") {
       const { results } = await env.DB.prepare(`
