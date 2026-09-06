@@ -24,6 +24,237 @@ export default {
       ) ||
       "";
 
+      // ==================================================
+  // EPUB FROM IPHONE SHORTCUT
+  // ==================================================
+
+  if (
+    url.pathname ===
+      "/api/shortcut/epub" &&
+    request.method ===
+      "POST"
+  ) {
+    try {
+
+      const body =
+        await request.json();
+
+
+      const title =
+        String(
+          body.title ||
+          "Fanfic"
+        ).trim();
+
+
+      const descriptionHtml =
+        String(
+          body.description_html ||
+          ""
+        );
+
+
+      const forewordHtml =
+        String(
+          body.foreword_html ||
+          ""
+        );
+
+
+      const receivedChapters =
+        Array.isArray(
+          body.chapters
+        )
+          ? body.chapters
+          : [];
+
+
+      if (
+        receivedChapters.length === 0
+      ) {
+        return json(
+          {
+            error:
+              "No chapters received."
+          },
+          400
+        );
+      }
+
+
+      if (
+        receivedChapters.length > 500
+      ) {
+        return json(
+          {
+            error:
+              "Too many chapters."
+          },
+          400
+        );
+      }
+
+
+      const chapters =
+        [];
+
+
+      // ----------------------------------
+      // Description
+      // ----------------------------------
+
+      if (
+        descriptionHtml.trim()
+      ) {
+        chapters.push({
+          number:
+            0,
+
+          title:
+            "Description",
+
+          html:
+            descriptionHtml
+        });
+      }
+
+
+      // ----------------------------------
+      // Foreword
+      // ----------------------------------
+
+      if (
+        forewordHtml.trim()
+      ) {
+        chapters.push({
+          number:
+            0,
+
+          title:
+            "Foreword",
+
+          html:
+            forewordHtml
+        });
+      }
+
+
+      // ----------------------------------
+      // Numbered chapters
+      // ----------------------------------
+
+      for (
+        let i = 0;
+        i <
+        receivedChapters.length;
+        i++
+      ) {
+
+        const chapter =
+          receivedChapters[i] ||
+          {};
+
+
+        const number =
+          Number(
+            chapter.number ||
+            i + 1
+          );
+
+
+        const chapterTitle =
+          String(
+            chapter.title ||
+            (
+              "Chapter " +
+              number
+            )
+          ).trim();
+
+
+        const chapterHtml =
+          String(
+            chapter.html ||
+            ""
+          );
+
+
+        if (
+          !chapterHtml.trim()
+        ) {
+          return json(
+            {
+              error:
+                "Chapter " +
+                number +
+                " is empty."
+            },
+            400
+          );
+        }
+
+
+        chapters.push({
+          number,
+          title:
+            chapterTitle,
+          html:
+            chapterHtml
+        });
+      }
+
+
+      // ----------------------------------
+      // Create EPUB
+      // ----------------------------------
+
+      const epub =
+        createEpub(
+          title,
+          chapters
+        );
+
+
+      const fileName =
+        safeFileName(
+          title
+        ) +
+        ".epub";
+
+
+      return new Response(
+        epub,
+        {
+          headers: {
+            "Content-Type":
+              "application/epub+zip",
+
+            "Content-Disposition":
+              "attachment; filename=\"fanfic.epub\"; filename*=UTF-8''" +
+              encodeURIComponent(
+                fileName
+              ),
+
+            "Cache-Control":
+              "no-store"
+          }
+        }
+      );
+
+
+    } catch (error) {
+
+      return json(
+        {
+          error:
+            error.message ||
+            "Could not create EPUB."
+        },
+        500
+      );
+    }
+  }
+
 
     // ==================================================
     // GET library
