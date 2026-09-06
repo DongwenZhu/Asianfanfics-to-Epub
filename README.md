@@ -16,33 +16,13 @@
 
 ## How It Works
 
-整体流程：
+整体流程如下：
 
-```text
-Asianfanfics in Safari
-        ↓
-iPhone Shortcut
-        ↓
-Run JavaScript on Web Page
-        ↓
-获取章节信息和正文
-        ↓
-Cloudflare Worker
-        ↓
-生成 EPUB
-        ↓
-Share / Send to Kindle
-```
-
-Safari 负责使用当前已经登录的 Asianfanfics 会话访问文章。
-
-快捷指令会：
-
-1. 获取文章信息和章节列表
-2. 并行获取各章节的 signed HTMX URL
-3. 并行下载全部章节正文
-4. 将文章内容发送至 Cloudflare Worker
-5. Worker 将内容整理并生成 EPUB
+1. Safari 使用当前已登录的 Asianfanfics 会话读取文章和章节列表
+2. Safari 页面中的 JavaScript 并行获取各章节的 signed HTMX URL
+3. JavaScript 并行读取全部章节正文
+4. Shortcut 将整理后的文章数据发送至 Cloudflare Worker
+5. Worker 负责 XHTML 清理和 EPUB 打包
 6. iPhone 打开 Share Sheet，可直接发送至 Kindle
 
 ---
