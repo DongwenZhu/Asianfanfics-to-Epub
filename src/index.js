@@ -5,15 +5,215 @@ import {
 
 export default {
   async fetch(request, env) {
-    const url =
-      new URL(
-        request.url
-      );
+    const url = new URL(request.url);
 
 
-    // ========================================
-    // GET recent 10 stories
-    // ========================================
+    // ==================================================
+    // DEBUG: Find and fetch Asianfanfics HTMX content
+    // ==================================================
+
+    if (url.pathname === "/api/debug-content") {
+      const chapterUrl =
+        "https://www.asianfanfics.com/story/view/1733952/1/shanti-shanti-shanti";
+
+      try {
+        // 1. Load Chapter 1 page while logged in
+        const pageResponse =
+          await fetch(chapterUrl, {
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (compatible; FanficKindle/1.0)",
+
+              "Cookie":
+                env.AFF_COOKIE
+            }
+          });
+
+
+        const pageHtml =
+          await pageResponse.text();
+
+
+        // 2. Find every hx-get on the page
+        const hxGets =
+          extractHxGets(
+            pageHtml
+          );
+
+
+        const storyHxGets =
+          hxGets.filter(
+            item =>
+              item.includes(
+                "/htmx/story/"
+              )
+          );
+
+
+        // 3. Fetch each HTMX endpoint
+        const results = [];
+
+
+        for (
+          const endpoint
+          of storyHxGets
+        ) {
+          try {
+            const fullUrl =
+              new URL(
+                endpoint,
+                "https://www.asianfanfics.com"
+              ).href;
+
+
+            const htmxResponse =
+              await fetch(
+                fullUrl,
+                {
+                  headers: {
+                    "User-Agent":
+                      "Mozilla/5.0 (compatible; FanficKindle/1.0)",
+
+                    "Cookie":
+                      env.AFF_COOKIE,
+
+                    "Referer":
+                      chapterUrl,
+
+                    "HX-Request":
+                      "true",
+
+                    "HX-Current-URL":
+                      chapterUrl
+                  },
+
+                  redirect:
+                    "follow"
+                }
+              );
+
+
+            const html =
+              await htmxResponse.text();
+
+
+            const text =
+              htmlToText(
+                html
+              );
+
+
+            results.push({
+              endpoint,
+
+              status:
+                htmxResponse.status,
+
+              final_url:
+                htmxResponse.url,
+
+              html_length:
+                html.length,
+
+              text_length:
+                text.length,
+
+              has_description:
+                /description/i.test(
+                  html
+                ),
+
+              has_foreword:
+                /foreword/i.test(
+                  html
+                ),
+
+              has_story_description:
+                html.includes(
+                  'id="story-description"'
+                ),
+
+              has_story_foreword:
+                html.includes(
+                  'id="story-foreword"'
+                ),
+
+              has_user_content:
+                html.includes(
+                  "user-content"
+                ),
+
+              first_text:
+                text.slice(
+                  0,
+                  1200
+                ),
+
+              html_preview:
+                html.slice(
+                  0,
+                  1800
+                )
+            });
+
+          } catch (error) {
+            results.push({
+              endpoint,
+              error:
+                error.message
+            });
+          }
+        }
+
+
+        return json({
+          success:
+            pageResponse.ok,
+
+          page_status:
+            pageResponse.status,
+
+          page_html_length:
+            pageHtml.length,
+
+          still_age_gate:
+            pageHtml.includes(
+              "Are you over 18?"
+            ),
+
+          hx_get_count:
+            hxGets.length,
+
+          all_hx_gets:
+            hxGets,
+
+          story_hx_get_count:
+            storyHxGets.length,
+
+          story_hx_gets:
+            storyHxGets,
+
+          results
+        });
+
+
+      } catch (error) {
+        return json(
+          {
+            success: false,
+            error:
+              error.message
+          },
+          500
+        );
+      }
+    }
+
+
+
+    // ==================================================
+    // GET: recent stories
+    // ==================================================
 
     if (
       url.pathname ===
@@ -28,12 +228,11 @@ export default {
               SELECT *
               FROM stories
               ORDER BY
-                datetime(
-                  accessed_at
-                ) DESC
+                datetime(accessed_at) DESC
               LIMIT 10
             `)
             .all();
+
 
         return json(
           results
@@ -51,9 +250,10 @@ export default {
     }
 
 
-    // ========================================
-    // POST add story
-    // ========================================
+
+    // ==================================================
+    // POST: Add story
+    // ==================================================
 
     if (
       url.pathname ===
@@ -65,14 +265,15 @@ export default {
         const body =
           await request.json();
 
-        const storyUrl =
+
+        const inputUrl =
           (
             body.story_url ||
             ""
           ).trim();
 
 
-        if (!storyUrl) {
+        if (!inputUrl) {
           return json(
             {
               error:
@@ -84,7 +285,7 @@ export default {
 
 
         if (
-          !storyUrl.includes(
+          !inputUrl.includes(
             "asianfanfics.com"
           )
         ) {
@@ -95,6 +296,58 @@ export default {
             },
             400
           );
+        }
+
+
+        // Convert chapter URL to main story URL
+        const storyUrl =
+          normalizeStoryUrl(
+            inputUrl
+          );
+
+
+        // Existing story?
+        const existing =
+          await env.DB
+            .prepare(`
+              SELECT *
+              FROM stories
+              WHERE story_url = ?
+            `)
+            .bind(
+              storyUrl
+            )
+            .first();
+
+
+        // Shelf maximum = 10.
+        // Do not automatically delete old books.
+        if (!existing) {
+          const countResult =
+            await env.DB
+              .prepare(`
+                SELECT COUNT(*) AS count
+                FROM stories
+              `)
+              .first();
+
+
+          const count =
+            Number(
+              countResult?.count ||
+              0
+            );
+
+
+          if (count >= 10) {
+            return json(
+              {
+                error:
+                  "Your library is full. Please delete one story before adding another."
+              },
+              409
+            );
+          }
         }
 
 
@@ -160,11 +413,17 @@ export default {
 
         return json({
           success: true,
+
           title:
             info.title,
+
           chapter_count:
-            info.chapter_count
+            info.chapter_count,
+
+          story_url:
+            storyUrl
         });
+
 
       } catch (error) {
         return json(
@@ -178,9 +437,10 @@ export default {
     }
 
 
-    // ========================================
-    // POST update story
-    // ========================================
+
+    // ==================================================
+    // POST: Update story
+    // ==================================================
 
     if (
       url.pathname.match(
@@ -193,6 +453,7 @@ export default {
         const parts =
           url.pathname
             .split("/");
+
 
         const id =
           parts[3];
@@ -280,14 +541,19 @@ export default {
 
         return json({
           success: true,
+
           title:
             info.title,
+
           old_count:
             oldCount,
+
           new_count:
             newCount,
+
           added
         });
+
 
       } catch (error) {
         return json(
@@ -301,13 +567,14 @@ export default {
     }
 
 
-    // ========================================
+
+    // ==================================================
     // DELETE story
-    // ========================================
+    // ==================================================
 
     if (
-      url.pathname.startsWith(
-        "/api/stories/"
+      url.pathname.match(
+        /^\/api\/stories\/\d+$/
       ) &&
       request.method ===
         "DELETE"
@@ -332,6 +599,7 @@ export default {
           success: true
         });
 
+
       } catch (error) {
         return json(
           {
@@ -344,9 +612,10 @@ export default {
     }
 
 
-    // ========================================
-    // Main page
-    // ========================================
+
+    // ==================================================
+    // Main webpage
+    // ==================================================
 
     return new Response(
       page(),
@@ -361,16 +630,206 @@ export default {
 };
 
 
+
+// ==================================================
+// Normalize Asianfanfics URL
+// ==================================================
+
+function normalizeStoryUrl(
+  inputUrl
+) {
+  try {
+    const url =
+      new URL(
+        inputUrl
+      );
+
+
+    const match =
+      url.pathname.match(
+        /^\/story\/view\/(\d+)(?:\/\d+)?(?:\/([^/?#]+))?/
+      );
+
+
+    if (!match) {
+      return inputUrl;
+    }
+
+
+    const storyId =
+      match[1];
+
+
+    const slug =
+      match[2];
+
+
+    if (slug) {
+      return (
+        "https://www.asianfanfics.com/story/view/" +
+        storyId +
+        "/" +
+        slug
+      );
+    }
+
+
+    return (
+      "https://www.asianfanfics.com/story/view/" +
+      storyId
+    );
+
+
+  } catch {
+    return inputUrl;
+  }
+}
+
+
+
+// ==================================================
+// Find all hx-get attributes
+// ==================================================
+
+function extractHxGets(
+  html
+) {
+  const matches =
+    [
+      ...html.matchAll(
+        /\bhx-get\s*=\s*["']([^"']+)["']/gi
+      )
+    ];
+
+
+  return [
+    ...new Set(
+      matches.map(
+        match =>
+          decodeHtml(
+            match[1]
+          )
+      )
+    )
+  ];
+}
+
+
+
+// ==================================================
+// Convert returned HTML to readable text
+// ==================================================
+
+function htmlToText(
+  html
+) {
+  return decodeHtml(
+    html
+      .replace(
+        /<script[\s\S]*?<\/script>/gi,
+        " "
+      )
+      .replace(
+        /<style[\s\S]*?<\/style>/gi,
+        " "
+      )
+      .replace(
+        /<br\s*\/?>/gi,
+        "\n"
+      )
+      .replace(
+        /<\/p>/gi,
+        "\n"
+      )
+      .replace(
+        /<\/div>/gi,
+        "\n"
+      )
+      .replace(
+        /<\/h[1-6]>/gi,
+        "\n"
+      )
+      .replace(
+        /<[^>]+>/g,
+        " "
+      )
+  )
+    .replace(
+      /[ \t]+/g,
+      " "
+    )
+    .replace(
+      /\n\s+/g,
+      "\n"
+    )
+    .replace(
+      /\n{3,}/g,
+      "\n\n"
+    )
+    .trim();
+}
+
+
+
+// ==================================================
+// Decode basic HTML entities
+// ==================================================
+
+function decodeHtml(
+  value
+) {
+  return String(
+    value || ""
+  )
+    .replace(
+      /&amp;/g,
+      "&"
+    )
+    .replace(
+      /&quot;/g,
+      '"'
+    )
+    .replace(
+      /&#39;/g,
+      "'"
+    )
+    .replace(
+      /&#x27;/g,
+      "'"
+    )
+    .replace(
+      /&lt;/g,
+      "<"
+    )
+    .replace(
+      /&gt;/g,
+      ">"
+    )
+    .replace(
+      /&nbsp;/g,
+      " "
+    );
+}
+
+
+
+// ==================================================
+// JSON response
+// ==================================================
+
 function json(
   data,
   status = 200
 ) {
   return new Response(
     JSON.stringify(
-      data
+      data,
+      null,
+      2
     ),
     {
       status,
+
       headers: {
         "content-type":
           "application/json;charset=UTF-8"
@@ -379,6 +838,11 @@ function json(
   );
 }
 
+
+
+// ==================================================
+// Main webpage
+// ==================================================
 
 function page() {
   return `<!DOCTYPE html>
@@ -402,8 +866,7 @@ function page() {
 <style>
 
 * {
-  box-sizing:
-    border-box;
+  box-sizing: border-box;
 }
 
 body {
