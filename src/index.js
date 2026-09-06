@@ -24,6 +24,141 @@ export default {
       ) ||
       "";
 
+  // ==================================================
+  // TEST HTMX CHAPTER WITHOUT AFF COOKIE
+  // ==================================================
+
+  if (
+    url.pathname ===
+      "/api/test-chapter-token" &&
+    request.method ===
+      "POST"
+  ) {
+    try {
+
+      const body =
+        await request.json();
+
+
+      const endpoint =
+        String(
+          body.endpoint ||
+          ""
+        ).trim();
+
+
+      const currentUrl =
+        String(
+          body.current_url ||
+          ""
+        ).trim();
+
+
+      if (
+        !endpoint.startsWith(
+          "/htmx/chapter/"
+        )
+      ) {
+        return json(
+          {
+            success: false,
+            error:
+              "Invalid chapter endpoint."
+          },
+          400
+        );
+      }
+
+
+      const targetUrl =
+        "https://www.asianfanfics.com" +
+        endpoint;
+
+
+      const response =
+        await fetch(
+          targetUrl,
+          {
+            method:
+              "GET",
+
+            headers: {
+              "HX-Request":
+                "true",
+
+              "HX-Current-URL":
+                currentUrl ||
+                "https://www.asianfanfics.com/"
+            },
+
+            redirect:
+              "follow"
+          }
+        );
+
+
+      const text =
+        await response.text();
+
+
+      return json({
+        success:
+          response.ok,
+
+        status:
+          response.status,
+
+        final_url:
+          response.url,
+
+        content_type:
+          response.headers.get(
+            "content-type"
+          ) || "",
+
+        length:
+          text.length,
+
+        has_user_content:
+          text.includes(
+            "user-content"
+          ),
+
+        looks_like_login:
+          /login|sign in|are you over 18/i.test(
+            text
+          ),
+
+        preview:
+          text
+            .replace(
+              /\s+/g,
+              " "
+            )
+            .slice(
+              0,
+              500
+            )
+      });
+
+
+    } catch (error) {
+
+      return json(
+        {
+          success:
+            false,
+
+          error:
+            error.message ||
+            String(error)
+        },
+        500
+      );
+    }
+  }
+
+    
       // ==================================================
   // EPUB FROM IPHONE SHORTCUT
   // ==================================================
