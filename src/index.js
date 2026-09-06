@@ -126,7 +126,46 @@ export default {
 
         const chapters =
           [];
-
+        
+        
+        // ----------------------------------
+        // Description
+        // ----------------------------------
+        
+        if (
+          info.description_html
+        ) {
+          chapters.push({
+            number:
+              0,
+        
+            title:
+              "Description",
+        
+            html:
+              info.description_html
+          });
+        }
+        
+        
+        // ----------------------------------
+        // Foreword
+        // ----------------------------------
+        
+        if (
+          info.foreword_html
+        ) {
+          chapters.push({
+            number:
+              0,
+        
+            title:
+              "Foreword",
+        
+            html:
+              info.foreword_html
+          });
+        }
 
         for (
           const chapter
