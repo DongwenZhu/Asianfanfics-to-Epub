@@ -1,8 +1,9 @@
-export async function fetchStoryInfo(storyUrl) {
+export async function fetchStoryInfo(storyUrl, cookie) {
   const response = await fetch(storyUrl, {
     headers: {
       "User-Agent":
-        "Mozilla/5.0 (compatible; FanficKindle/1.0)"
+        "Mozilla/5.0 (compatible; FanficKindle/1.0)",
+      "Cookie": cookie
     }
   });
 
@@ -14,96 +15,175 @@ export async function fetchStoryInfo(storyUrl) {
 
   const html = await response.text();
 
-  const title = extractTitle(html);
+  if (html.includes("Are you over 18?")) {
+    throw new Error(
+      "Asianfanfics login session is not active."
+    );
+  }
 
-  const chapters = extractChapters(
-    html,
-    storyUrl
-  );
+  const title =
+    extractTitle(html);
+
+  const chapters =
+    extractChapters(
+      html,
+      storyUrl
+    );
 
   return {
     title,
-    chapter_count: chapters.length,
+    chapter_count:
+      chapters.length,
     chapters
   };
 }
 
+
 function extractTitle(html) {
   const match =
-    html.match(/<title>([\s\S]*?)<\/title>/i);
+    html.match(
+      /<title>([\s\S]*?)<\/title>/i
+    );
 
   if (!match) {
     return "Untitled Story";
   }
 
   let title =
-    decodeHtml(match[1]).trim();
+    decodeHtml(
+      match[1]
+    ).trim();
 
   title =
     title
-      .replace(/\s*-\s*Asianfanfics.*$/i, "")
+      .replace(
+        /\s*-\s*Asianfanfics\s*$/i,
+        ""
+      )
       .trim();
 
-  return title || "Untitled Story";
+  return (
+    title ||
+    "Untitled Story"
+  );
 }
 
-function extractChapters(html, storyUrl) {
-  const base =
+
+function extractChapters(
+  html,
+  storyUrl
+) {
+  const story =
     new URL(storyUrl);
 
+  const pathParts =
+    story.pathname
+      .split("/")
+      .filter(Boolean);
+
+  const viewIndex =
+    pathParts.indexOf("view");
+
+  const storyId =
+    pathParts[
+      viewIndex + 1
+    ];
+
+  if (!storyId) {
+    throw new Error(
+      "Could not detect story ID."
+    );
+  }
+
+  const pattern =
+    new RegExp(
+      'href=["\\\'](' +
+      '\\/story\\/view\\/' +
+      storyId +
+      '\\/(\\d+)\\/[^"\\\']+' +
+      ')["\\\']',
+      "gi"
+    );
+
   const matches =
-    [...html.matchAll(
-      /href=["']([^"']*\/story\/view\/\d+\/[^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi
-    )];
+    [
+      ...html.matchAll(
+        pattern
+      )
+    ];
 
-  const found = [];
-
+  const chapters = [];
   const seen =
     new Set();
 
-  for (const match of matches) {
-    let href =
-      decodeHtml(match[1]);
+  for (
+    const match
+    of matches
+  ) {
+    const relativeUrl =
+      match[1];
 
-    const text =
-      stripTags(
-        decodeHtml(match[2])
-      ).trim();
+    const chapterNumber =
+      Number(match[2]);
 
-    if (!text) {
+    if (
+      seen.has(
+        chapterNumber
+      )
+    ) {
       continue;
     }
 
-    const fullUrl =
-      new URL(
-        href,
-        base.origin
-      ).href;
+    seen.add(
+      chapterNumber
+    );
 
-    if (seen.has(fullUrl)) {
-      continue;
-    }
+    chapters.push({
+      number:
+        chapterNumber,
 
-    seen.add(fullUrl);
+      title:
+        "Chapter " +
+        chapterNumber,
 
-    found.push({
-      title: text,
-      url: fullUrl
+      url:
+        new URL(
+          relativeUrl,
+          story.origin
+        ).href
     });
   }
 
-  return found;
+  chapters.sort(
+    (a, b) =>
+      a.number -
+      b.number
+  );
+
+  return chapters;
 }
 
-function stripTags(value) {
-  return value.replace(/<[^>]*>/g, "");
-}
 
 function decodeHtml(value) {
   return value
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+    .replace(
+      /&amp;/g,
+      "&"
+    )
+    .replace(
+      /&quot;/g,
+      '"'
+    )
+    .replace(
+      /&#39;/g,
+      "'"
+    )
+    .replace(
+      /&lt;/g,
+      "<"
+    )
+    .replace(
+      /&gt;/g,
+      ">"
+    );
 }
