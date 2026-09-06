@@ -1,221 +1,26 @@
 import {
-  fetchStoryInfo
+  zipSync,
+  strToU8
+} from "fflate";
+
+
+import {
+  fetchStoryInfo,
+  fetchChapterContent,
+  normalizeStoryUrl
 } from "./asianfanfics.js";
 
 
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
+    const url =
+      new URL(
+        request.url
+      );
 
 
     // ==================================================
-    // DEBUG: Find and fetch Asianfanfics HTMX content
-    // ==================================================
-
-    if (url.pathname === "/api/debug-content") {
-      const chapterUrl =
-        "https://www.asianfanfics.com/story/view/1733952/1/shanti-shanti-shanti";
-
-      try {
-        // 1. Load Chapter 1 page while logged in
-        const pageResponse =
-          await fetch(chapterUrl, {
-            headers: {
-              "User-Agent":
-                "Mozilla/5.0 (compatible; FanficKindle/1.0)",
-
-              "Cookie":
-                env.AFF_COOKIE
-            }
-          });
-
-
-        const pageHtml =
-          await pageResponse.text();
-
-
-        // 2. Find every hx-get on the page
-        const hxGets =
-          extractHxGets(
-            pageHtml
-          );
-
-
-        const storyHxGets =
-          hxGets.filter(
-            item =>
-              item.includes(
-                "/htmx/story/"
-              ) ||
-              item.includes(
-                "/htmx/chapter/"
-              )
-          );
-
-
-        // 3. Fetch each HTMX endpoint
-        const results = [];
-
-
-        for (
-          const endpoint
-          of storyHxGets
-        ) {
-          try {
-            const fullUrl =
-              new URL(
-                endpoint,
-                "https://www.asianfanfics.com"
-              ).href;
-
-
-            const htmxResponse =
-              await fetch(
-                fullUrl,
-                {
-                  headers: {
-                    "User-Agent":
-                      "Mozilla/5.0 (compatible; FanficKindle/1.0)",
-
-                    "Cookie":
-                      env.AFF_COOKIE,
-
-                    "Referer":
-                      chapterUrl,
-
-                    "HX-Request":
-                      "true",
-
-                    "HX-Current-URL":
-                      chapterUrl
-                  },
-
-                  redirect:
-                    "follow"
-                }
-              );
-
-
-            const html =
-              await htmxResponse.text();
-
-
-            const text =
-              htmlToText(
-                html
-              );
-
-
-            results.push({
-              endpoint,
-
-              status:
-                htmxResponse.status,
-
-              final_url:
-                htmxResponse.url,
-
-              html_length:
-                html.length,
-
-              text_length:
-                text.length,
-
-              has_description:
-                /description/i.test(
-                  html
-                ),
-
-              has_foreword:
-                /foreword/i.test(
-                  html
-                ),
-
-              has_story_description:
-                html.includes(
-                  'id="story-description"'
-                ),
-
-              has_story_foreword:
-                html.includes(
-                  'id="story-foreword"'
-                ),
-
-              has_user_content:
-                html.includes(
-                  "user-content"
-                ),
-
-              first_text:
-                text.slice(
-                  0,
-                  1200
-                ),
-
-              html_preview:
-                html.slice(
-                  0,
-                  1800
-                )
-            });
-
-          } catch (error) {
-            results.push({
-              endpoint,
-              error:
-                error.message
-            });
-          }
-        }
-
-
-        return json({
-          success:
-            pageResponse.ok,
-
-          page_status:
-            pageResponse.status,
-
-          page_html_length:
-            pageHtml.length,
-
-          still_age_gate:
-            pageHtml.includes(
-              "Are you over 18?"
-            ),
-
-          hx_get_count:
-            hxGets.length,
-
-          all_hx_gets:
-            hxGets,
-
-          story_hx_get_count:
-            storyHxGets.length,
-
-          story_hx_gets:
-            storyHxGets,
-
-          results
-        });
-
-
-      } catch (error) {
-        return json(
-          {
-            success: false,
-            error:
-              error.message
-          },
-          500
-        );
-      }
-    }
-
-
-
-    // ==================================================
-    // GET: recent stories
+    // GET library
     // ==================================================
 
     if (
@@ -253,9 +58,190 @@ export default {
     }
 
 
+    // ==================================================
+    // DOWNLOAD EPUB
+    // ==================================================
+
+    const epubMatch =
+      url.pathname.match(
+        /^\/api\/stories\/(\d+)\/epub$/
+      );
+
+
+    if (
+      epubMatch &&
+      request.method ===
+        "GET"
+    ) {
+      try {
+        const id =
+          epubMatch[1];
+
+
+        const existing =
+          await env.DB
+            .prepare(`
+              SELECT *
+              FROM stories
+              WHERE id = ?
+            `)
+            .bind(id)
+            .first();
+
+
+        if (!existing) {
+          return json(
+            {
+              error:
+                "Story not found."
+            },
+            404
+          );
+        }
+
+
+        // ----------------------------------
+        // Refresh story information
+        // ----------------------------------
+
+        const info =
+          await fetchStoryInfo(
+            existing.story_url,
+            env.AFF_COOKIE
+          );
+
+
+        if (
+          !info.chapters.length
+        ) {
+          throw new Error(
+            "No chapters found."
+          );
+        }
+
+
+        // ----------------------------------
+        // Download every chapter
+        // ----------------------------------
+
+        const chapters =
+          [];
+
+
+        for (
+          const chapter
+          of info.chapters
+        ) {
+          const content =
+            await fetchChapterContent(
+              chapter.url,
+              env.AFF_COOKIE
+            );
+
+
+          chapters.push({
+            number:
+              chapter.number,
+
+            title:
+              content.title ||
+              (
+                "Chapter " +
+                chapter.number
+              ),
+
+            html:
+              content.html
+          });
+        }
+
+
+        // ----------------------------------
+        // Create EPUB
+        // ----------------------------------
+
+        const epub =
+          createEpub(
+            info.title,
+            chapters
+          );
+
+
+        const now =
+          new Date()
+            .toISOString();
+
+
+        await env.DB
+          .prepare(`
+            UPDATE stories
+
+            SET
+              title = ?,
+              chapter_count = ?,
+              accessed_at = ?,
+              last_updated = ?
+
+            WHERE id = ?
+          `)
+          .bind(
+            info.title,
+            info.chapter_count,
+            now,
+            now,
+            id
+          )
+          .run();
+
+
+        const fileName =
+          safeFileName(
+            info.title
+          ) +
+          ".epub";
+
+
+        return new Response(
+          epub,
+          {
+            headers: {
+              "Content-Type":
+                "application/epub+zip",
+
+              "Content-Disposition":
+                "attachment; filename=\"fanfic.epub\"; filename*=UTF-8''" +
+                encodeURIComponent(
+                  fileName
+                ),
+
+              "Cache-Control":
+                "no-store"
+            }
+          }
+        );
+
+
+      } catch (error) {
+        return new Response(
+          errorPage(
+            error.message
+          ),
+          {
+            status:
+              500,
+
+            headers: {
+              "content-type":
+                "text/html;charset=UTF-8"
+            }
+          }
+        );
+      }
+    }
+
 
     // ==================================================
-    // POST: Add story
+    // ADD STORY
     // ==================================================
 
     if (
@@ -302,14 +288,12 @@ export default {
         }
 
 
-        // Convert chapter URL to main story URL
         const storyUrl =
           normalizeStoryUrl(
             inputUrl
           );
 
 
-        // Existing story?
         const existing =
           await env.DB
             .prepare(`
@@ -323,8 +307,6 @@ export default {
             .first();
 
 
-        // Shelf maximum = 10.
-        // Do not automatically delete old books.
         if (!existing) {
           const countResult =
             await env.DB
@@ -342,11 +324,13 @@ export default {
             );
 
 
-          if (count >= 10) {
+          if (
+            count >= 10
+          ) {
             return json(
               {
                 error:
-                  "Your library is full. Please delete one story before adding another."
+                  "Your library is full. Please delete one story first."
               },
               409
             );
@@ -370,6 +354,7 @@ export default {
           .prepare(`
             INSERT INTO stories (
               story_url,
+              story_id,
               title,
               chapter_count,
               accessed_at,
@@ -377,6 +362,7 @@ export default {
             )
 
             VALUES (
+              ?,
               ?,
               ?,
               ?,
@@ -390,6 +376,9 @@ export default {
 
             DO UPDATE SET
 
+              story_id =
+                excluded.story_id,
+
               title =
                 excluded.title,
 
@@ -402,15 +391,14 @@ export default {
               last_updated =
                 excluded.last_updated
           `)
-
           .bind(
-            storyUrl,
+            info.story_url,
+            info.story_id,
             info.title,
             info.chapter_count,
             now,
             now
           )
-
           .run();
 
 
@@ -421,10 +409,7 @@ export default {
             info.title,
 
           chapter_count:
-            info.chapter_count,
-
-          story_url:
-            storyUrl
+            info.chapter_count
         });
 
 
@@ -440,26 +425,24 @@ export default {
     }
 
 
+    // ==================================================
+    // CHECK UPDATE
+    // ==================================================
 
-    // ==================================================
-    // POST: Update story
-    // ==================================================
+    const updateMatch =
+      url.pathname.match(
+        /^\/api\/stories\/(\d+)\/update$/
+      );
+
 
     if (
-      url.pathname.match(
-        /^\/api\/stories\/\d+\/update$/
-      ) &&
+      updateMatch &&
       request.method ===
         "POST"
     ) {
       try {
-        const parts =
-          url.pathname
-            .split("/");
-
-
         const id =
-          parts[3];
+          updateMatch[1];
 
 
         const existing =
@@ -530,7 +513,6 @@ export default {
 
             WHERE id = ?
           `)
-
           .bind(
             info.title,
             newCount,
@@ -538,15 +520,11 @@ export default {
             now,
             id
           )
-
           .run();
 
 
         return json({
           success: true,
-
-          title:
-            info.title,
 
           old_count:
             oldCount,
@@ -570,31 +548,30 @@ export default {
     }
 
 
+    // ==================================================
+    // DELETE
+    // ==================================================
 
-    // ==================================================
-    // DELETE story
-    // ==================================================
+    const deleteMatch =
+      url.pathname.match(
+        /^\/api\/stories\/(\d+)$/
+      );
+
 
     if (
-      url.pathname.match(
-        /^\/api\/stories\/\d+$/
-      ) &&
+      deleteMatch &&
       request.method ===
         "DELETE"
     ) {
       try {
-        const id =
-          url.pathname
-            .split("/")
-            .pop();
-
-
         await env.DB
           .prepare(`
             DELETE FROM stories
             WHERE id = ?
           `)
-          .bind(id)
+          .bind(
+            deleteMatch[1]
+          )
           .run();
 
 
@@ -615,9 +592,8 @@ export default {
     }
 
 
-
     // ==================================================
-    // Main webpage
+    // Main page
     // ==================================================
 
     return new Response(
@@ -635,190 +611,477 @@ export default {
 
 
 // ==================================================
-// Normalize Asianfanfics URL
+// CREATE EPUB
 // ==================================================
 
-function normalizeStoryUrl(
-  inputUrl
+function createEpub(
+  bookTitle,
+  chapters
 ) {
-  try {
-    const url =
-      new URL(
-        inputUrl
+  const bookId =
+    "urn:uuid:" +
+    crypto.randomUUID();
+
+
+  const modified =
+    new Date()
+      .toISOString()
+      .replace(
+        /\.\d{3}Z$/,
+        "Z"
       );
 
 
-    const match =
-      url.pathname.match(
-        /^\/story\/view\/(\d+)(?:\/\d+)?(?:\/([^/?#]+))?/
-      );
+  const files = {};
 
 
-    if (!match) {
-      return inputUrl;
+  // IMPORTANT:
+  // EPUB requires this to be first
+  // and uncompressed.
+
+  files["mimetype"] = [
+    strToU8(
+      "application/epub+zip"
+    ),
+    {
+      level:
+        0
     }
+  ];
 
 
-    const storyId =
-      match[1];
-
-
-    const slug =
-      match[2];
-
-
-    if (slug) {
-      return (
-        "https://www.asianfanfics.com/story/view/" +
-        storyId +
-        "/" +
-        slug
-      );
-    }
-
-
-    return (
-      "https://www.asianfanfics.com/story/view/" +
-      storyId
+  files[
+    "META-INF/container.xml"
+  ] =
+    strToU8(
+`<?xml version="1.0" encoding="UTF-8"?>
+<container
+  version="1.0"
+  xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile
+      full-path="OEBPS/content.opf"
+      media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`
     );
 
 
-  } catch {
-    return inputUrl;
-  }
+  files[
+    "OEBPS/style.css"
+  ] =
+    strToU8(
+`body {
+  font-family: serif;
+  line-height: 1.65;
+  margin: 5%;
 }
 
+h1 {
+  font-size: 1.5em;
+  margin-bottom: 1.5em;
+}
+
+p {
+  margin-top: 0.7em;
+  margin-bottom: 0.7em;
+}
+
+blockquote {
+  margin-left: 1.5em;
+  margin-right: 1.5em;
+}`
+    );
 
 
-// ==================================================
-// Find all hx-get attributes
-// ==================================================
+  // ----------------------------------
+  // Chapter XHTML
+  // ----------------------------------
 
-function extractHxGets(
-  html
-) {
-  const matches =
-    [
-      ...html.matchAll(
-        /\bhx-get\s*=\s*["']([^"']+)["']/gi
-      )
-    ];
+  chapters.forEach(
+    (
+      chapter,
+      index
+    ) => {
+      const number =
+        index + 1;
 
 
-  return [
-    ...new Set(
-      matches.map(
-        match =>
-          decodeHtml(
-            match[1]
+      const file =
+        "OEBPS/chapter-" +
+        number +
+        ".xhtml";
+
+
+      files[file] =
+        strToU8(
+          chapterXhtml(
+            chapter.title,
+            chapter.html
           )
+        );
+    }
+  );
+
+
+  // ----------------------------------
+  // Navigation
+  // ----------------------------------
+
+  files[
+    "OEBPS/nav.xhtml"
+  ] =
+    strToU8(
+      createNav(
+        bookTitle,
+        chapters
       )
-    )
-  ];
+    );
+
+
+  files[
+    "OEBPS/toc.ncx"
+  ] =
+    strToU8(
+      createNcx(
+        bookId,
+        bookTitle,
+        chapters
+      )
+    );
+
+
+  files[
+    "OEBPS/content.opf"
+  ] =
+    strToU8(
+      createOpf(
+        bookId,
+        bookTitle,
+        modified,
+        chapters
+      )
+    );
+
+
+  return zipSync(
+    files,
+    {
+      level:
+        6
+    }
+  );
 }
 
 
 
 // ==================================================
-// Convert returned HTML to readable text
+// XHTML chapter
 // ==================================================
 
-function htmlToText(
-  html
+function chapterXhtml(
+  title,
+  bodyHtml
 ) {
-  return decodeHtml(
-    html
-      .replace(
-        /<script[\s\S]*?<\/script>/gi,
-        " "
-      )
-      .replace(
-        /<style[\s\S]*?<\/style>/gi,
-        " "
-      )
-      .replace(
-        /<br\s*\/?>/gi,
-        "\n"
-      )
-      .replace(
-        /<\/p>/gi,
-        "\n"
-      )
-      .replace(
-        /<\/div>/gi,
-        "\n"
-      )
-      .replace(
-        /<\/h[1-6]>/gi,
-        "\n"
-      )
-      .replace(
-        /<[^>]+>/g,
-        " "
-      )
-  )
-    .replace(
-      /[ \t]+/g,
-      " "
-    )
-    .replace(
-      /\n\s+/g,
-      "\n"
-    )
-    .replace(
-      /\n{3,}/g,
-      "\n\n"
-    )
-    .trim();
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xml:lang="zh">
+<head>
+  <meta charset="UTF-8"/>
+  <title>${escapeXml(title)}</title>
+  <link
+    rel="stylesheet"
+    type="text/css"
+    href="style.css"/>
+</head>
+<body>
+  <h1>${escapeXml(title)}</h1>
+
+  <div class="chapter">
+    ${bodyHtml}
+  </div>
+</body>
+</html>`;
 }
 
 
 
 // ==================================================
-// Decode basic HTML entities
+// EPUB navigation
 // ==================================================
 
-function decodeHtml(
+function createNav(
+  bookTitle,
+  chapters
+) {
+  const items =
+    chapters
+      .map(
+        (
+          chapter,
+          index
+        ) => {
+          return `
+      <li>
+        <a href="chapter-${index + 1}.xhtml">${escapeXml(
+          chapter.title
+        )}</a>
+      </li>`;
+        }
+      )
+      .join("");
+
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html
+  xmlns="http://www.w3.org/1999/xhtml"
+  xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Contents</title>
+</head>
+<body>
+
+  <nav
+    epub:type="toc"
+    id="toc">
+
+    <h1>${escapeXml(bookTitle)}</h1>
+
+    <ol>
+      ${items}
+    </ol>
+
+  </nav>
+
+</body>
+</html>`;
+}
+
+
+
+// ==================================================
+// NCX compatibility TOC
+// ==================================================
+
+function createNcx(
+  bookId,
+  bookTitle,
+  chapters
+) {
+  const points =
+    chapters
+      .map(
+        (
+          chapter,
+          index
+        ) => {
+          const order =
+            index + 1;
+
+
+          return `
+    <navPoint
+      id="navPoint-${order}"
+      playOrder="${order}">
+
+      <navLabel>
+        <text>${escapeXml(
+          chapter.title
+        )}</text>
+      </navLabel>
+
+      <content
+        src="chapter-${order}.xhtml"/>
+
+    </navPoint>`;
+        }
+      )
+      .join("");
+
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<ncx
+  xmlns="http://www.daisy.org/z3986/2005/ncx/"
+  version="2005-1">
+
+  <head>
+    <meta
+      name="dtb:uid"
+      content="${escapeXml(bookId)}"/>
+  </head>
+
+  <docTitle>
+    <text>${escapeXml(bookTitle)}</text>
+  </docTitle>
+
+  <navMap>
+    ${points}
+  </navMap>
+
+</ncx>`;
+}
+
+
+
+// ==================================================
+// OPF
+// ==================================================
+
+function createOpf(
+  bookId,
+  bookTitle,
+  modified,
+  chapters
+) {
+  const manifestChapters =
+    chapters
+      .map(
+        (
+          chapter,
+          index
+        ) => {
+          const number =
+            index + 1;
+
+
+          return `
+    <item
+      id="chapter-${number}"
+      href="chapter-${number}.xhtml"
+      media-type="application/xhtml+xml"/>`;
+        }
+      )
+      .join("");
+
+
+  const spineChapters =
+    chapters
+      .map(
+        (
+          chapter,
+          index
+        ) => {
+          return `
+    <itemref
+      idref="chapter-${index + 1}"/>`;
+        }
+      )
+      .join("");
+
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<package
+  xmlns="http://www.idpf.org/2007/opf"
+  version="3.0"
+  unique-identifier="bookid">
+
+  <metadata
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+
+    <dc:identifier
+      id="bookid">${escapeXml(bookId)}</dc:identifier>
+
+    <dc:title>${escapeXml(bookTitle)}</dc:title>
+
+    <dc:language>zh</dc:language>
+
+    <meta
+      property="dcterms:modified">${modified}</meta>
+
+  </metadata>
+
+
+  <manifest>
+
+    <item
+      id="nav"
+      href="nav.xhtml"
+      media-type="application/xhtml+xml"
+      properties="nav"/>
+
+    <item
+      id="ncx"
+      href="toc.ncx"
+      media-type="application/x-dtbncx+xml"/>
+
+    <item
+      id="css"
+      href="style.css"
+      media-type="text/css"/>
+
+    ${manifestChapters}
+
+  </manifest>
+
+
+  <spine toc="ncx">
+
+    ${spineChapters}
+
+  </spine>
+
+</package>`;
+}
+
+
+
+// ==================================================
+// HELPERS
+// ==================================================
+
+function escapeXml(
   value
 ) {
   return String(
     value || ""
   )
     .replace(
-      /&amp;/g,
-      "&"
+      /&/g,
+      "&amp;"
     )
     .replace(
-      /&quot;/g,
-      '"'
+      /</g,
+      "&lt;"
     )
     .replace(
-      /&#39;/g,
-      "'"
+      />/g,
+      "&gt;"
     )
     .replace(
-      /&#x27;/g,
-      "'"
+      /"/g,
+      "&quot;"
     )
     .replace(
-      /&lt;/g,
-      "<"
-    )
-    .replace(
-      /&gt;/g,
-      ">"
-    )
-    .replace(
-      /&nbsp;/g,
-      " "
+      /'/g,
+      "&apos;"
     );
 }
 
 
 
-// ==================================================
-// JSON response
-// ==================================================
+function safeFileName(
+  value
+) {
+  return String(
+    value ||
+    "fanfic"
+  )
+    .replace(
+      /[\\/:*?"<>|]/g,
+      "_"
+    )
+    .trim()
+    .slice(
+      0,
+      120
+    );
+}
+
+
 
 function json(
   data,
@@ -844,7 +1107,51 @@ function json(
 
 
 // ==================================================
-// Main webpage
+// Error page
+// ==================================================
+
+function errorPage(
+  message
+) {
+  return `<!DOCTYPE html>
+
+<html>
+<head>
+<meta charset="UTF-8">
+<meta
+  name="viewport"
+  content="width=device-width, initial-scale=1">
+<title>EPUB Error</title>
+</head>
+
+<body
+  style="
+    font-family:sans-serif;
+    padding:30px;
+    max-width:600px;
+    margin:auto;
+  ">
+
+<h2>
+  Could not create EPUB
+</h2>
+
+<p>
+  ${escapeXml(message)}
+</p>
+
+<p>
+  You can go back to Fanfic Kindle and try again.
+</p>
+
+</body>
+</html>`;
+}
+
+
+
+// ==================================================
+// WEB PAGE
 // ==================================================
 
 function page() {
@@ -858,8 +1165,7 @@ function page() {
 
 <meta
   name="viewport"
-  content="width=device-width, initial-scale=1.0"
->
+  content="width=device-width, initial-scale=1.0">
 
 <title>
   Fanfic Kindle
@@ -879,230 +1185,137 @@ body {
     "Segoe UI",
     sans-serif;
 
-  max-width:
-    620px;
+  max-width: 620px;
 
-  margin:
-    0 auto;
+  margin: 0 auto;
 
   padding:
     28px 18px 60px;
 
-  background:
-    #f6f6f6;
+  background: #f6f6f6;
 
-  color:
-    #202020;
+  color: #202020;
 }
 
 h1 {
-  font-size:
-    36px;
-
-  margin:
-    0 0 6px;
+  font-size: 36px;
+  margin: 0 0 6px;
 }
 
 h2 {
-  margin-top:
-    38px;
+  margin-top: 38px;
 }
 
 .subtitle {
-  color:
-    #777;
-
-  font-size:
-    18px;
-
-  margin-bottom:
-    28px;
+  color: #777;
+  font-size: 18px;
+  margin-bottom: 28px;
 }
 
 .card {
-  background:
-    white;
-
-  border-radius:
-    16px;
-
-  padding:
-    18px;
-
-  margin-bottom:
-    14px;
+  background: white;
+  border-radius: 16px;
+  padding: 18px;
+  margin-bottom: 14px;
 
   box-shadow:
     0 3px 14px
-    rgba(
-      0,
-      0,
-      0,
-      0.05
-    );
+    rgba(0,0,0,0.05);
 }
 
 input {
-  width:
-    100%;
-
-  padding:
-    15px;
+  width: 100%;
+  padding: 15px;
 
   border:
     1px solid #ddd;
 
-  border-radius:
-    11px;
+  border-radius: 11px;
 
-  font-size:
-    16px;
+  font-size: 16px;
 
-  margin-bottom:
-    12px;
+  margin-bottom: 12px;
 }
 
-button {
-  border:
-    0;
-
-  border-radius:
-    10px;
+button,
+.download {
+  border: 0;
+  border-radius: 10px;
 
   padding:
-    13px 16px;
+    13px 14px;
 
-  font-size:
-    16px;
+  font-size: 15px;
 
-  cursor:
-    pointer;
+  cursor: pointer;
+
+  text-decoration: none;
+
+  text-align: center;
 }
 
 .primary {
-  width:
-    100%;
-
-  background:
-    #111;
-
-  color:
-    white;
+  width: 100%;
+  background: #111;
+  color: white;
 }
 
 .story-title {
-  font-size:
-    19px;
-
-  font-weight:
-    650;
-
-  margin-bottom:
-    6px;
+  font-size: 19px;
+  font-weight: 650;
+  margin-bottom: 6px;
 }
 
 .story-meta {
-  color:
-    #666;
-
-  font-size:
-    14px;
-
-  margin-bottom:
-    14px;
+  color: #666;
+  font-size: 14px;
+  margin-bottom: 16px;
 }
 
-.story-url {
-  font-size:
-    12px;
+.download {
+  display: block;
+  width: 100%;
 
-  color:
-    #999;
+  background: #111;
+  color: white;
 
-  overflow:
-    hidden;
-
-  text-overflow:
-    ellipsis;
-
-  white-space:
-    nowrap;
-
-  margin-bottom:
-    14px;
+  margin-bottom: 9px;
 }
 
 .buttons {
-  display:
-    flex;
-
-  gap:
-    8px;
+  display: flex;
+  gap: 8px;
 }
 
 .update {
-  flex:
-    1;
+  flex: 1;
 
-  background:
-    #111;
-
-  color:
-    white;
+  background: #e9e9e9;
+  color: #222;
 }
 
 .delete {
-  background:
-    #ececec;
-
-  color:
-    #333;
+  background: #e9e9e9;
+  color: #555;
 }
 
 .empty {
-  color:
-    #888;
-
-  text-align:
-    center;
-
-  padding:
-    30px;
+  color: #888;
+  text-align: center;
+  padding: 30px;
 }
 
 .message {
-  margin-top:
-    12px;
-
-  font-size:
-    14px;
-}
-
-.error {
-  color:
-    #b42318;
+  margin-top: 12px;
+  font-size: 14px;
 }
 
 .success {
-  color:
-    #18794e;
+  color: #18794e;
 }
 
-.update-result {
-  margin-top:
-    12px;
-
-  padding:
-    12px;
-
-  border-radius:
-    9px;
-
-  background:
-    #f3f3f3;
-
-  font-size:
-    14px;
+.error {
+  color: #b42318;
 }
 
 </style>
@@ -1128,20 +1341,20 @@ button {
   <input
     id="storyUrl"
     type="url"
-    placeholder="Paste Asianfanfics story URL"
-  >
+    placeholder="Paste Asianfanfics story URL">
 
   <button
     class="primary"
-    onclick="addStory()"
-  >
+    onclick="addStory()">
+
     Add Story
+
   </button>
 
   <div
     id="message"
-    class="message"
-  ></div>
+    class="message">
+  </div>
 
 </div>
 
@@ -1184,13 +1397,7 @@ async function loadStories() {
 
 
     if (!response.ok) {
-
-      library.innerHTML =
-        '<div class="card empty">' +
-        'Failed to load library.' +
-        '</div>';
-
-      return;
+      throw new Error();
     }
 
 
@@ -1213,66 +1420,54 @@ async function loadStories() {
 <div class="card">
 
   <div class="story-title">
-
     \${escapeHtml(
       story.title ||
       "Untitled Story"
     )}
-
   </div>
 
 
   <div class="story-meta">
-
     \${Number(
       story.chapter_count ||
       0
-    )}
-    chapters
-
+    )} chapters
   </div>
 
 
-  <div class="story-url">
+  <a
+    class="download"
+    href="/api/stories/\${story.id}/epub">
 
-    \${escapeHtml(
-      story.story_url
-    )}
+    Download EPUB
 
-  </div>
+  </a>
 
 
   <div class="buttons">
 
     <button
       class="update"
-      onclick="
-        updateStory(
-          \${story.id}
-        )
-      "
-    >
-      Update
+      onclick="checkUpdate(
+        \${story.id}
+      )">
+
+      Check Update
+
     </button>
 
 
     <button
       class="delete"
-      onclick="
-        deleteStory(
-          \${story.id}
-        )
-      "
-    >
+      onclick="deleteStory(
+        \${story.id}
+      )">
+
       Delete
+
     </button>
 
   </div>
-
-
-  <div
-    id="result-\${story.id}"
-  ></div>
 
 </div>
 
@@ -1281,15 +1476,13 @@ async function loadStories() {
         .join("");
 
 
-  } catch (error) {
+  } catch {
 
     library.innerHTML =
       '<div class="card empty">' +
       'Failed to load library.' +
       '</div>';
-
   }
-
 }
 
 
@@ -1308,16 +1501,12 @@ async function addStory() {
     );
 
 
-  const storyUrl =
-    input.value.trim();
+  message.className =
+    "message";
 
 
   message.textContent =
     "Reading story...";
-
-
-  message.className =
-    "message";
 
 
   try {
@@ -1337,7 +1526,7 @@ async function addStory() {
           body:
             JSON.stringify({
               story_url:
-                storyUrl
+                input.value.trim()
             })
         }
       );
@@ -1351,7 +1540,6 @@ async function addStory() {
 
       message.className =
         "message error";
-
 
       message.textContent =
         result.error ||
@@ -1379,36 +1567,21 @@ async function addStory() {
     await loadStories();
 
 
-  } catch (error) {
+  } catch {
 
     message.className =
       "message error";
 
-
     message.textContent =
       "Something went wrong.";
-
   }
-
 }
 
 
 
-async function updateStory(
+async function checkUpdate(
   id
 ) {
-
-  const resultBox =
-    document.getElementById(
-      "result-" + id
-    );
-
-
-  resultBox.innerHTML =
-    '<div class="update-result">' +
-    'Checking Asianfanfics...' +
-    '</div>';
-
 
   try {
 
@@ -1430,13 +1603,10 @@ async function updateStory(
 
     if (!response.ok) {
 
-      resultBox.innerHTML =
-        '<div class="update-result">' +
-        escapeHtml(
-          result.error ||
-          "Update failed."
-        ) +
-        '</div>';
+      alert(
+        result.error ||
+        "Update failed."
+      );
 
       return;
     }
@@ -1446,47 +1616,40 @@ async function updateStory(
       result.added > 0
     ) {
 
-      resultBox.innerHTML =
-        '<div class="update-result">' +
-        '✓ ' +
+      alert(
         result.added +
-        ' new chapter' +
+        " new chapter" +
         (
           result.added === 1
-            ? ''
-            : 's'
+            ? ""
+            : "s"
         ) +
-        ' found.<br>' +
+        " found!\\n\\n" +
         result.old_count +
-        ' → ' +
+        " → " +
         result.new_count +
-        ' chapters' +
-        '</div>';
+        " chapters"
+      );
 
     } else {
 
-      resultBox.innerHTML =
-        '<div class="update-result">' +
-        '✓ Already up to date — ' +
+      alert(
+        "Already up to date — " +
         result.new_count +
-        ' chapters.' +
-        '</div>';
-
+        " chapters."
+      );
     }
 
 
     await loadStories();
 
 
-  } catch (error) {
+  } catch {
 
-    resultBox.innerHTML =
-      '<div class="update-result">' +
-      'Update failed.' +
-      '</div>';
-
+    alert(
+      "Update failed."
+    );
   }
-
 }
 
 
@@ -1495,14 +1658,11 @@ async function deleteStory(
   id
 ) {
 
-  const confirmed =
-    confirm(
-      "Remove this story " +
-      "from your library?"
-    );
-
-
-  if (!confirmed) {
+  if (
+    !confirm(
+      "Remove this story from your library?"
+    )
+  ) {
     return;
   }
 
@@ -1518,7 +1678,6 @@ async function deleteStory(
 
 
   await loadStories();
-
 }
 
 
@@ -1538,7 +1697,6 @@ function escapeHtml(
 
 
   return div.innerHTML;
-
 }
 
 
