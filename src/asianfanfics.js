@@ -2,17 +2,39 @@ export function normalizeStoryUrl(inputUrl) {
   try {
     const url = new URL(inputUrl);
 
-    const match =
-      url.pathname.match(
-        /^\/story\/view\/(\d+)(?:\/\d+)?(?:\/([^/?#]+))?/
-      );
+    const parts =
+      url.pathname
+        .split("/")
+        .filter(Boolean);
 
-    if (!match) {
+    if (
+      parts[0] !== "story" ||
+      parts[1] !== "view" ||
+      !parts[2]
+    ) {
       return inputUrl;
     }
 
-    const storyId = match[1];
-    const slug = match[2];
+    const storyId =
+      parts[2];
+
+    let slug = "";
+
+    if (
+      parts[3] &&
+      !/^\d+$/.test(parts[3])
+    ) {
+      slug =
+        parts[3];
+    }
+
+    if (
+      parts[4] &&
+      /^\d+$/.test(parts[3])
+    ) {
+      slug =
+        parts[4];
+    }
 
     if (slug) {
       return (
@@ -53,25 +75,152 @@ export async function fetchStoryInfo(
   const html =
     await response.text();
 
-  checkLogin(
-    html
-  );
+  checkLogin(html);
+
 
   const title =
     extractTitle(
       html
     );
 
+
   const storyId =
     extractStoryId(
       storyUrl
     );
+
 
   const chapters =
     extractChapterLinks(
       html,
       storyId
     );
+
+
+  // ----------------------------------
+  // Load Description + Foreword
+  // ----------------------------------
+
+  let descriptionHtml = "";
+  let forewordHtml = "";
+
+
+  const hxGets =
+    extractHxGets(
+      html
+    );
+
+
+  const introPrefix =
+    "/htmx/story/" +
+    storyId +
+    "/";
+
+
+  const introEndpoint =
+    hxGets.find(
+      item => {
+        if (
+          !item.startsWith(
+            introPrefix
+          )
+        ) {
+          return false;
+        }
+
+        const rest =
+          item.slice(
+            introPrefix.length
+          );
+
+        return (
+          rest &&
+          !rest.includes("/") &&
+          !rest.includes("?")
+        );
+      }
+    );
+
+
+  if (introEndpoint) {
+    try {
+      const fullUrl =
+        new URL(
+          introEndpoint,
+          "https://www.asianfanfics.com"
+        ).href;
+
+
+      const introResponse =
+        await fetch(
+          fullUrl,
+          {
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (compatible; FanficKindle/1.0)",
+
+              "Cookie":
+                cookie,
+
+              "Referer":
+                storyUrl,
+
+              "HX-Request":
+                "true",
+
+              "HX-Current-URL":
+                storyUrl
+            },
+
+            redirect:
+              "follow"
+          }
+        );
+
+
+      if (
+        introResponse.ok
+      ) {
+        const introHtml =
+          await introResponse.text();
+
+
+        const description =
+          extractElementById(
+            introHtml,
+            "story-description"
+          );
+
+
+        const foreword =
+          extractElementById(
+            introHtml,
+            "story-foreword"
+          );
+
+
+        if (description) {
+          descriptionHtml =
+            sanitizeChapterHtml(
+              description
+            );
+        }
+
+
+        if (foreword) {
+          forewordHtml =
+            sanitizeChapterHtml(
+              foreword
+            );
+        }
+      }
+
+    } catch {
+      // Description / Foreword are optional.
+      // Do not stop the whole book if this request fails.
+    }
+  }
+
 
   return {
     story_url:
@@ -85,7 +234,13 @@ export async function fetchStoryInfo(
     chapter_count:
       chapters.length,
 
-    chapters
+    chapters,
+
+    description_html:
+      descriptionHtml,
+
+    foreword_html:
+      forewordHtml
   };
 }
 
@@ -95,37 +250,27 @@ export async function fetchChapterContent(
   chapterUrl,
   cookie
 ) {
-  // -------------------------------------
-  // First load normal chapter page
-  // -------------------------------------
-
   const pageResponse =
     await affFetch(
       chapterUrl,
       cookie
     );
 
+
   const pageHtml =
     await pageResponse.text();
+
 
   checkLogin(
     pageHtml
   );
 
 
-  // -------------------------------------
-  // Get real chapter title
-  // -------------------------------------
-
   const chapterTitle =
     extractChapterTitle(
       pageHtml
     );
 
-
-  // -------------------------------------
-  // Find HTMX chapter endpoint
-  // -------------------------------------
 
   const hxGets =
     extractHxGets(
@@ -155,10 +300,6 @@ export async function fetchChapterContent(
       "https://www.asianfanfics.com"
     ).href;
 
-
-  // -------------------------------------
-  // Fetch actual chapter body
-  // -------------------------------------
 
   const contentResponse =
     await fetch(
@@ -200,7 +341,7 @@ export async function fetchChapterContent(
 
 
   const userContent =
-    extractUserContent(
+    extractFirstUserContent(
       contentHtml
     );
 
@@ -212,28 +353,21 @@ export async function fetchChapterContent(
   }
 
 
-  const cleanHtml =
-    sanitizeChapterHtml(
-      userContent
-    );
-
-
   return {
     title:
       chapterTitle,
 
     html:
-      cleanHtml,
-
-    endpoint:
-      chapterEndpoint
+      sanitizeChapterHtml(
+        userContent
+      )
   };
 }
 
 
 
 // ==================================================
-// Asianfanfics request
+// Request helper
 // ==================================================
 
 async function affFetch(
@@ -304,26 +438,30 @@ function extractStoryId(
     );
 
 
-  const match =
-    url.pathname.match(
-      /\/story\/view\/(\d+)/
-    );
+  const parts =
+    url.pathname
+      .split("/")
+      .filter(Boolean);
 
 
-  if (!match) {
+  if (
+    parts[0] !== "story" ||
+    parts[1] !== "view" ||
+    !parts[2]
+  ) {
     throw new Error(
       "Could not detect story ID."
     );
   }
 
 
-  return match[1];
+  return parts[2];
 }
 
 
 
 // ==================================================
-// Title
+// Story title
 // ==================================================
 
 function extractTitle(
@@ -340,7 +478,7 @@ function extractTitle(
   }
 
 
-  let title =
+  const title =
     decodeHtml(
       stripTags(
         match[1]
@@ -362,14 +500,14 @@ function extractTitle(
 
 
 // ==================================================
-// Chapter list
+// Chapter links
 // ==================================================
 
 function extractChapterLinks(
   html,
   storyId
 ) {
-  const hrefMatches =
+  const matches =
     [
       ...html.matchAll(
         /href=["']([^"']+)["']/gi
@@ -383,9 +521,9 @@ function extractChapterLinks(
 
   for (
     const match
-    of hrefMatches
+    of matches
   ) {
-    let href =
+    const href =
       decodeHtml(
         match[1]
       );
@@ -404,42 +542,48 @@ function extractChapterLinks(
       continue;
     }
 
-    
-    const chapterMatch =
-      parsed.pathname.match(
-        new RegExp(
-          "^/story/view/" +
-          storyId +
-          "/(\\d+)(?:/|$)"
-        )
-      );
+
+    const parts =
+      parsed.pathname
+        .split("/")
+        .filter(Boolean);
 
 
-    if (!chapterMatch) {
+    if (
+      parts[0] !== "story" ||
+      parts[1] !== "view" ||
+      parts[2] !== String(storyId)
+    ) {
       continue;
     }
 
 
-    const number =
+    const chapterNumber =
       Number(
-        chapterMatch[1]
+        parts[3]
       );
 
 
-    if (!number) {
+    if (
+      !Number.isInteger(
+        chapterNumber
+      ) ||
+      chapterNumber <= 0
+    ) {
       continue;
     }
 
 
     if (
       !chapters.has(
-        number
+        chapterNumber
       )
     ) {
       chapters.set(
-        number,
+        chapterNumber,
         {
-          number,
+          number:
+            chapterNumber,
 
           url:
             parsed.href
@@ -474,35 +618,15 @@ function extractChapterTitle(
 
 
   if (match) {
-    const value =
+    const title =
       decodeHtml(
         match[1]
       ).trim();
 
 
-    if (value) {
-      return value;
+    if (title) {
+      return title;
     }
-  }
-
-
-  const titleMatch =
-    html.match(
-      /<title>([\s\S]*?)<\/title>/i
-    );
-
-
-  if (titleMatch) {
-    return decodeHtml(
-      stripTags(
-        titleMatch[1]
-      )
-    )
-      .replace(
-        /\s*-\s*Asianfanfics.*$/i,
-        ""
-      )
-      .trim();
   }
 
 
@@ -512,7 +636,7 @@ function extractChapterTitle(
 
 
 // ==================================================
-// HTMX URLs
+// hx-get
 // ==================================================
 
 function extractHxGets(
@@ -541,39 +665,48 @@ function extractHxGets(
 
 
 // ==================================================
-// Extract first .user-content block
+// Extract element by ID
 // ==================================================
 
-function extractUserContent(
-  html
+function extractElementById(
+  html,
+  id
 ) {
-  const startMatch =
-    /<([a-z0-9]+)\b[^>]*class=["'][^"']*\buser-content\b[^"']*["'][^>]*>/i
-      .exec(
-        html
-      );
+  const pattern =
+    new RegExp(
+      '<([a-z0-9]+)\\b[^>]*\\bid=["\\\']' +
+      escapeRegex(id) +
+      '["\\\'][^>]*>',
+      "i"
+    );
 
 
-  if (!startMatch) {
-    return null;
+  const start =
+    pattern.exec(
+      html
+    );
+
+
+  if (!start) {
+    return "";
   }
 
 
   const tag =
-    startMatch[1]
+    start[1]
       .toLowerCase();
 
 
   const contentStart =
-    startMatch.index +
-    startMatch[0].length;
+    start.index +
+    start[0].length;
 
 
   const tagPattern =
     new RegExp(
-      "<\\\\/?" +
+      "<\\/?" +
       tag +
-      "\\\\b[^>]*>",
+      "\\b[^>]*>",
       "gi"
     );
 
@@ -594,18 +727,17 @@ function extractUserContent(
         )
     )
   ) {
-    const token =
-      match[0];
-
-
     if (
-      token.startsWith(
+      match[0].startsWith(
         "</"
       )
     ) {
       depth--;
 
-      if (depth === 0) {
+
+      if (
+        depth === 0
+      ) {
         return html.slice(
           contentStart,
           match.index
@@ -613,7 +745,7 @@ function extractUserContent(
       }
 
     } else if (
-      !token.endsWith(
+      !match[0].endsWith(
         "/>"
       )
     ) {
@@ -622,15 +754,99 @@ function extractUserContent(
   }
 
 
-  return html.slice(
-    contentStart
-  );
+  return "";
 }
 
 
 
 // ==================================================
-// Clean HTML for EPUB
+// First user-content block
+// ==================================================
+
+function extractFirstUserContent(
+  html
+) {
+  const start =
+    /<([a-z0-9]+)\b[^>]*class=["'][^"']*\buser-content\b[^"']*["'][^>]*>/i
+      .exec(
+        html
+      );
+
+
+  if (!start) {
+    return "";
+  }
+
+
+  const tag =
+    start[1]
+      .toLowerCase();
+
+
+  const contentStart =
+    start.index +
+    start[0].length;
+
+
+  const tagPattern =
+    new RegExp(
+      "<\\/?" +
+      tag +
+      "\\b[^>]*>",
+      "gi"
+    );
+
+
+  tagPattern.lastIndex =
+    contentStart;
+
+
+  let depth = 1;
+  let match;
+
+
+  while (
+    (
+      match =
+        tagPattern.exec(
+          html
+        )
+    )
+  ) {
+    if (
+      match[0].startsWith(
+        "</"
+      )
+    ) {
+      depth--;
+
+
+      if (
+        depth === 0
+      ) {
+        return html.slice(
+          contentStart,
+          match.index
+        );
+      }
+
+    } else if (
+      !match[0].endsWith(
+        "/>"
+      )
+    ) {
+      depth++;
+    }
+  }
+
+
+  return "";
+}
+
+
+
+// ==================================================
+// Clean content for EPUB
 // ==================================================
 
 function sanitizeChapterHtml(
@@ -641,8 +857,6 @@ function sanitizeChapterHtml(
       html || ""
     );
 
-
-  // Remove things that should not enter EPUB
 
   clean =
     clean
@@ -712,13 +926,11 @@ function sanitizeChapterHtml(
         }
 
 
-        const closing =
+        if (
           whole.startsWith(
             "</"
-          );
-
-
-        if (closing) {
+          )
+        ) {
           return (
             "</" +
             tag +
@@ -804,4 +1016,17 @@ function decodeHtml(
       /&nbsp;/g,
       " "
     );
+}
+
+
+
+function escapeRegex(
+  value
+) {
+  return String(
+    value
+  ).replace(
+    /[.*+?^${}()|[\]\\]/g,
+    "\\$&"
+  );
 }
