@@ -1050,6 +1050,68 @@ blockquote {
 }
 
 
+// ==================================================
+// XHTML CLEANUP
+// ==================================================
+
+function cleanXhtml(
+  html
+) {
+  return String(
+    html || ""
+  )
+
+    .replace(
+      /&nbsp;/gi,
+      "&#160;"
+    )
+
+    .replace(
+      /&copy;/gi,
+      "&#169;"
+    )
+
+    .replace(
+      /&reg;/gi,
+      "&#174;"
+    )
+
+    .replace(
+      /&hellip;/gi,
+      "&#8230;"
+    )
+
+    .replace(
+      /&mdash;/gi,
+      "&#8212;"
+    )
+
+    .replace(
+      /&ndash;/gi,
+      "&#8211;"
+    )
+
+    .replace(
+      /&ldquo;/gi,
+      "&#8220;"
+    )
+
+    .replace(
+      /&rdquo;/gi,
+      "&#8221;"
+    )
+
+    .replace(
+      /&lsquo;/gi,
+      "&#8216;"
+    )
+
+    .replace(
+      /&rsquo;/gi,
+      "&#8217;"
+    );
+}
+
 
 // ==================================================
 // XHTML chapter
@@ -1076,13 +1138,11 @@ function chapterXhtml(
   <h1>${escapeXml(title)}</h1>
 
   <div class="chapter">
-    ${bodyHtml}
+    ${cleanXhtml(bodyHtml)}
   </div>
 </body>
 </html>`;
 }
-
-
 
 // ==================================================
 // EPUB navigation
