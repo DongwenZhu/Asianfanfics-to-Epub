@@ -176,6 +176,67 @@ if (url.pathname === "/api/debug-htmx") {
       }
     );
 
+    if (url.pathname === "/api/debug-login") {
+  const testUrl =
+    "https://www.asianfanfics.com/story/view/1733952/shanti-shanti-shanti";
+
+  try {
+    const response = await fetch(testUrl, {
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (compatible; FanficKindle/1.0)",
+        "Cookie": env.AFF_COOKIE
+      }
+    });
+
+    const html = await response.text();
+
+    const titleMatch =
+      html.match(/<title>([\s\S]*?)<\/title>/i);
+
+    const title =
+      titleMatch
+        ? titleMatch[1].trim()
+        : null;
+
+    const links = [
+      ...html.matchAll(
+        /href=["']([^"']+)["']/gi
+      )
+    ]
+      .map(match => match[1])
+      .filter(href =>
+        href.includes("story") ||
+        href.includes("chapter")
+      );
+
+    return json({
+      success: response.ok,
+      status: response.status,
+      html_length: html.length,
+      title,
+      still_age_gate:
+        html.includes("Are you over 18?"),
+      login_page:
+        html.includes("Log In") &&
+        html.includes("/login"),
+      link_count:
+        [...new Set(links)].length,
+      links:
+        [...new Set(links)].slice(0, 80)
+    });
+
+  } catch (error) {
+    return json(
+      {
+        success: false,
+        error: error.message
+      },
+      500
+    );
+  }
+}
+    
     const setCookie =
       verifyResponse.headers.get("set-cookie");
 
