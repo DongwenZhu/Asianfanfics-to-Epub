@@ -404,13 +404,13 @@ function extractChapterLinks(
       continue;
     }
 
-
+    
     const chapterMatch =
       parsed.pathname.match(
         new RegExp(
           "^/story/view/" +
           storyId +
-          "/(\\\\d+)(?:/|$)"
+          "/(\\d+)(?:/|$)"
         )
       );
 
