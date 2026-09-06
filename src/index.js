@@ -1,64 +1,29 @@
+import {
+  fetchStoryInfo
+} from "./asianfanfics.js";
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    // Temporary test: can Cloudflare read Asianfanfics?
-    if (url.pathname === "/api/debug") {
-      const testUrl =
-        "https://www.asianfanfics.com/story/view/1733952/shanti-shanti-shanti";
+if (url.pathname === "/api/debug-story") {
+  const testUrl =
+    "https://www.asianfanfics.com/story/view/1733952/shanti-shanti-shanti";
 
-      try {
-        const response = await fetch(testUrl, {
-          headers: {
-            "User-Agent":
-              "Mozilla/5.0 (compatible; FanficKindle/1.0)"
-          }
-        });
+  try {
+    const info =
+      await fetchStoryInfo(testUrl);
 
-        const html = await response.text();
-
-        return new Response(
-          JSON.stringify(
-            {
-              success: response.ok,
-              status: response.status,
-              final_url: response.url,
-              content_type:
-                response.headers.get("content-type"),
-              html_length: html.length,
-              first_500_characters:
-                html.slice(0, 500)
-            },
-            null,
-            2
-          ),
-          {
-            headers: {
-              "content-type":
-                "application/json;charset=UTF-8"
-            }
-          }
-        );
-      } catch (error) {
-        return new Response(
-          JSON.stringify(
-            {
-              success: false,
-              error: error.message
-            },
-            null,
-            2
-          ),
-          {
-            status: 500,
-            headers: {
-              "content-type":
-                "application/json;charset=UTF-8"
-            }
-          }
-        );
-      }
-    }
-    
+    return json(info);
+  } catch (error) {
+    return json(
+      {
+        success: false,
+        error: error.message
+      },
+      500
+    );
+  }
+}
 
     if (url.pathname === "/api/stories" && request.method === "GET") {
       const { results } = await env.DB.prepare(`
