@@ -18,6 +18,13 @@ export default {
         request.url
       );
 
+    const affCookie =
+      request.headers.get(
+        "X-AFF-Cookie"
+      ) ||
+      env.AFF_COOKIE ||
+      "";
+
 
     // ==================================================
     // GET library
@@ -107,7 +114,7 @@ export default {
         const info =
           await fetchStoryInfo(
             existing.story_url,
-            env.AFF_COOKIE
+            affCookie
           );
 
 
@@ -174,7 +181,7 @@ export default {
           const content =
             await fetchChapterContent(
               chapter.url,
-              env.AFF_COOKIE
+              affCookie
             );
 
 
@@ -380,7 +387,7 @@ export default {
         const info =
           await fetchStoryInfo(
             storyUrl,
-            env.AFF_COOKIE
+            affCookie
           );
 
 
@@ -509,7 +516,7 @@ export default {
         const info =
           await fetchStoryInfo(
             existing.story_url,
-            env.AFF_COOKIE
+            affCookie
           );
 
 
@@ -1192,7 +1199,6 @@ function errorPage(
 // ==================================================
 // WEB PAGE
 // ==================================================
-
 function page() {
   return `<!DOCTYPE html>
 
@@ -1262,6 +1268,29 @@ h2 {
     rgba(0,0,0,0.05);
 }
 
+.session-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.session-title {
+  font-weight: 650;
+  margin-bottom: 5px;
+}
+
+.session-status {
+  color: #666;
+  font-size: 14px;
+}
+
+.session-button {
+  flex-shrink: 0;
+  background: #e9e9e9;
+  color: #222;
+}
+
 input {
   width: 100%;
   padding: 15px;
@@ -1291,6 +1320,13 @@ button,
   text-decoration: none;
 
   text-align: center;
+
+  font-family: inherit;
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .primary {
@@ -1375,6 +1411,35 @@ button,
 </div>
 
 
+<div class="card session-card">
+
+  <div>
+
+    <div class="session-title">
+      Asianfanfics Session
+    </div>
+
+    <div
+      id="sessionStatus"
+      class="session-status">
+      Checking...
+    </div>
+
+  </div>
+
+
+  <button
+    type="button"
+    class="session-button"
+    onclick="updateSession()">
+
+    Update Session
+
+  </button>
+
+</div>
+
+
 <div class="card">
 
   <input
@@ -1414,6 +1479,185 @@ button,
 
 <script>
 
+
+// ==================================================
+// Asianfanfics session
+// ==================================================
+
+const AFF_COOKIE_KEY =
+  "fanfic_aff_cookie";
+
+
+function getAffCookie() {
+
+  return (
+    localStorage.getItem(
+      AFF_COOKIE_KEY
+    ) ||
+    ""
+  );
+}
+
+
+function refreshSessionStatus() {
+
+  const status =
+    document.getElementById(
+      "sessionStatus"
+    );
+
+
+  if (!status) {
+    return;
+  }
+
+
+  if (
+    getAffCookie()
+  ) {
+
+    status.textContent =
+      "🟢 Session saved";
+
+  } else {
+
+    status.textContent =
+      "⚪ Session not saved";
+  }
+}
+
+
+function markSessionExpired() {
+
+  const status =
+    document.getElementById(
+      "sessionStatus"
+    );
+
+
+  if (!status) {
+    return;
+  }
+
+
+  status.textContent =
+    "🔴 Session expired — update it";
+}
+
+
+function updateSession() {
+
+  const cookie =
+    prompt(
+      "Paste the complete Asianfanfics Cookie here:"
+    );
+
+
+  if (
+    cookie === null
+  ) {
+    return;
+  }
+
+
+  const cleaned =
+    cookie.trim();
+
+
+  if (!cleaned) {
+
+    localStorage.removeItem(
+      AFF_COOKIE_KEY
+    );
+
+
+    refreshSessionStatus();
+
+
+    alert(
+      "Saved session removed."
+    );
+
+
+    return;
+  }
+
+
+  localStorage.setItem(
+    AFF_COOKIE_KEY,
+    cleaned
+  );
+
+
+  refreshSessionStatus();
+
+
+  alert(
+    "Asianfanfics session saved on this browser."
+  );
+}
+
+
+function affHeaders(
+  extra = {}
+) {
+
+  const cookie =
+    getAffCookie();
+
+
+  return {
+    ...extra,
+
+    ...(cookie
+      ? {
+          "X-AFF-Cookie":
+            cookie
+        }
+      : {})
+  };
+}
+
+
+function isSessionError(
+  message
+) {
+
+  const text =
+    String(
+      message ||
+      ""
+    ).toLowerCase();
+
+
+  return (
+    text.includes(
+      "login expired"
+    ) ||
+    text.includes(
+      "aff_cookie"
+    ) ||
+    text.includes(
+      "are you over 18"
+    )
+  );
+}
+
+
+function showSessionExpired() {
+
+  markSessionExpired();
+
+
+  alert(
+    "Asianfanfics session expired.\\n\\nClick Update Session and paste a new Cookie."
+  );
+}
+
+
+// ==================================================
+// Library
+// ==================================================
 
 async function loadStories() {
 
@@ -1474,13 +1718,17 @@ async function loadStories() {
   </div>
 
 
-  <a
+  <button
     class="download"
-    href="/api/stories/\${story.id}/epub">
+    type="button"
+    onclick="downloadEpub(
+      \${story.id},
+      this
+    )">
 
     Download EPUB
 
-  </a>
+  </button>
 
 
   <div class="buttons">
@@ -1488,7 +1736,8 @@ async function loadStories() {
     <button
       class="update"
       onclick="checkUpdate(
-        \${story.id}
+        \${story.id},
+        this
       )">
 
       Check Update
@@ -1525,6 +1774,9 @@ async function loadStories() {
 }
 
 
+// ==================================================
+// Add story
+// ==================================================
 
 async function addStory() {
 
@@ -1544,6 +1796,20 @@ async function addStory() {
     "message";
 
 
+  if (
+    !input.value.trim()
+  ) {
+
+    message.className =
+      "message error";
+
+    message.textContent =
+      "Please paste a story URL.";
+
+    return;
+  }
+
+
   message.textContent =
     "Reading story...";
 
@@ -1557,10 +1823,11 @@ async function addStory() {
           method:
             "POST",
 
-          headers: {
-            "content-type":
-              "application/json"
-          },
+          headers:
+            affHeaders({
+              "content-type":
+                "application/json"
+            }),
 
           body:
             JSON.stringify({
@@ -1577,12 +1844,32 @@ async function addStory() {
 
     if (!response.ok) {
 
+      if (
+        isSessionError(
+          result.error
+        )
+      ) {
+
+        message.className =
+          "message error";
+
+        message.textContent =
+          "Asianfanfics session expired.";
+
+        showSessionExpired();
+
+        return;
+      }
+
+
       message.className =
         "message error";
+
 
       message.textContent =
         result.error ||
         "Something went wrong.";
+
 
       return;
     }
@@ -1611,18 +1898,39 @@ async function addStory() {
     message.className =
       "message error";
 
+
     message.textContent =
       "Something went wrong.";
   }
 }
 
 
+// ==================================================
+// Check update
+// ==================================================
 
 async function checkUpdate(
-  id
+  id,
+  button
 ) {
 
+  const originalText =
+    button
+      ? button.textContent
+      : "Check Update";
+
+
   try {
+
+    if (button) {
+
+      button.disabled =
+        true;
+
+      button.textContent =
+        "Checking...";
+    }
+
 
     const response =
       await fetch(
@@ -1631,7 +1939,10 @@ async function checkUpdate(
         "/update",
         {
           method:
-            "POST"
+            "POST",
+
+          headers:
+            affHeaders()
         }
       );
 
@@ -1642,10 +1953,23 @@ async function checkUpdate(
 
     if (!response.ok) {
 
+      if (
+        isSessionError(
+          result.error
+        )
+      ) {
+
+        showSessionExpired();
+
+        return;
+      }
+
+
       alert(
         result.error ||
         "Update failed."
       );
+
 
       return;
     }
@@ -1688,10 +2012,188 @@ async function checkUpdate(
     alert(
       "Update failed."
     );
+
+
+  } finally {
+
+    if (button) {
+
+      button.disabled =
+        false;
+
+      button.textContent =
+        originalText;
+    }
   }
 }
 
 
+// ==================================================
+// Download EPUB
+// ==================================================
+
+async function downloadEpub(
+  id,
+  button
+) {
+
+  const originalText =
+    button.textContent;
+
+
+  try {
+
+    button.disabled =
+      true;
+
+
+    button.textContent =
+      "Generating EPUB...";
+
+
+    const response =
+      await fetch(
+        "/api/stories/" +
+        id +
+        "/epub",
+        {
+          method:
+            "GET",
+
+          headers:
+            affHeaders()
+        }
+      );
+
+
+    if (!response.ok) {
+
+      const errorText =
+        await response.text();
+
+
+      if (
+        isSessionError(
+          errorText
+        )
+      ) {
+
+        showSessionExpired();
+
+        return;
+      }
+
+
+      throw new Error(
+        "Could not create EPUB."
+      );
+    }
+
+
+    const blob =
+      await response.blob();
+
+
+    let filename =
+      "fanfic.epub";
+
+
+    const disposition =
+      response.headers.get(
+        "Content-Disposition"
+      );
+
+
+    if (disposition) {
+
+      const utfMatch =
+        disposition.match(
+          /filename\\*=UTF-8''([^;]+)/i
+        );
+
+
+      if (utfMatch) {
+
+        try {
+
+          filename =
+            decodeURIComponent(
+              utfMatch[1]
+            );
+
+        } catch {
+
+          filename =
+            "fanfic.epub";
+        }
+      }
+    }
+
+
+    const objectUrl =
+      URL.createObjectURL(
+        blob
+      );
+
+
+    const link =
+      document.createElement(
+        "a"
+      );
+
+
+    link.href =
+      objectUrl;
+
+
+    link.download =
+      filename;
+
+
+    document.body.appendChild(
+      link
+    );
+
+
+    link.click();
+
+
+    link.remove();
+
+
+    setTimeout(
+      () => {
+        URL.revokeObjectURL(
+          objectUrl
+        );
+      },
+      2000
+    );
+
+
+  } catch (error) {
+
+    alert(
+      error.message ||
+      "Download failed."
+    );
+
+
+  } finally {
+
+    button.disabled =
+      false;
+
+
+    button.textContent =
+      originalText;
+  }
+}
+
+
+// ==================================================
+// Delete
+// ==================================================
 
 async function deleteStory(
   id
@@ -1720,6 +2222,9 @@ async function deleteStory(
 }
 
 
+// ==================================================
+// HTML helper
+// ==================================================
 
 function escapeHtml(
   value
@@ -1739,6 +2244,11 @@ function escapeHtml(
 }
 
 
+// ==================================================
+// Start
+// ==================================================
+
+refreshSessionStatus();
 
 loadStories();
 
