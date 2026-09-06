@@ -22,7 +22,6 @@ export default {
       request.headers.get(
         "X-AFF-Cookie"
       ) ||
-      env.AFF_COOKIE ||
       "";
 
 
