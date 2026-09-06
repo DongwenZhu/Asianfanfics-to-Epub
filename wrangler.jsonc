@@ -1,5 +1,13 @@
 {
   "name": "fanfic",
   "main": "src/index.js",
-  "compatibility_date": "2026-09-01"
+  "compatibility_date": "2026-09-01",
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "fanfic-library",
+      "database_id": "ec4ba7ca-6147-45f4-a569-e49802a5bc53"
+    }
+  ]
 }
