@@ -1050,68 +1050,282 @@ blockquote {
 }
 
 
-// ==================================================
-// XHTML CLEANUP
-// ==================================================
-
 function cleanXhtml(
   html
 ) {
-  return String(
-    html || ""
-  )
 
-    .replace(
-      /&nbsp;/gi,
-      "&#160;"
-    )
-
-    .replace(
-      /&copy;/gi,
-      "&#169;"
-    )
-
-    .replace(
-      /&reg;/gi,
-      "&#174;"
-    )
-
-    .replace(
-      /&hellip;/gi,
-      "&#8230;"
-    )
-
-    .replace(
-      /&mdash;/gi,
-      "&#8212;"
-    )
-
-    .replace(
-      /&ndash;/gi,
-      "&#8211;"
-    )
-
-    .replace(
-      /&ldquo;/gi,
-      "&#8220;"
-    )
-
-    .replace(
-      /&rdquo;/gi,
-      "&#8221;"
-    )
-
-    .replace(
-      /&lsquo;/gi,
-      "&#8216;"
-    )
-
-    .replace(
-      /&rsquo;/gi,
-      "&#8217;"
+  var value =
+    String(
+      html || ""
     );
-}
 
+
+  // ==================================================
+  // HTML entities -> XHTML-safe entities
+  // ==================================================
+
+  value =
+    value
+      .replace(
+        /&nbsp;/gi,
+        "&#160;"
+      )
+      .replace(
+        /&copy;/gi,
+        "&#169;"
+      )
+      .replace(
+        /&reg;/gi,
+        "&#174;"
+      )
+      .replace(
+        /&hellip;/gi,
+        "&#8230;"
+      )
+      .replace(
+        /&mdash;/gi,
+        "&#8212;"
+      )
+      .replace(
+        /&ndash;/gi,
+        "&#8211;"
+      )
+      .replace(
+        /&ldquo;/gi,
+        "&#8220;"
+      )
+      .replace(
+        /&rdquo;/gi,
+        "&#8221;"
+      )
+      .replace(
+        /&lsquo;/gi,
+        "&#8216;"
+      )
+      .replace(
+        /&rsquo;/gi,
+        "&#8217;"
+      )
+      .replace(
+        /&middot;/gi,
+        "&#183;"
+      );
+
+
+  // ==================================================
+  // XHTML requires HTML void elements to self-close
+  // <br>  -> <br/>
+  // <hr>  -> <hr/>
+  // <img> -> <img/>
+  // ==================================================
+
+  value =
+    value.replace(
+      /<br\b([^>]*)>/gi,
+      function (
+        match,
+        attributes
+      ) {
+
+        attributes =
+          String(
+            attributes || ""
+          )
+            .replace(
+              /\/\s*$/,
+              ""
+            );
+
+        return (
+          "<br" +
+          attributes +
+          "/>"
+        );
+      }
+    );
+
+
+  value =
+    value.replace(
+      /<hr\b([^>]*)>/gi,
+      function (
+        match,
+        attributes
+      ) {
+
+        attributes =
+          String(
+            attributes || ""
+          )
+            .replace(
+              /\/\s*$/,
+              ""
+            );
+
+        return (
+          "<hr" +
+          attributes +
+          "/>"
+        );
+      }
+    );
+
+
+  value =
+    value.replace(
+      /<img\b([^>]*)>/gi,
+      function (
+        match,
+        attributes
+      ) {
+
+        attributes =
+          String(
+            attributes || ""
+          )
+            .replace(
+              /\/\s*$/,
+              ""
+            );
+
+        return (
+          "<img" +
+          attributes +
+          "/>"
+        );
+      }
+    );
+
+
+  // ==================================================
+  // Other possible HTML void elements
+  // ==================================================
+
+  var voidTags =
+    [
+      "input",
+      "source",
+      "track",
+      "area",
+      "base",
+      "col",
+      "embed",
+      "link",
+      "meta",
+      "wbr"
+    ];
+
+
+  for (
+    var i = 0;
+    i < voidTags.length;
+    i++
+  ) {
+
+    var tag =
+      voidTags[i];
+
+
+    var regex =
+      new RegExp(
+        "<" +
+        tag +
+        "\\b([^>]*)>",
+        "gi"
+      );
+
+
+    value =
+      value.replace(
+        regex,
+        function (
+          match,
+          attributes
+        ) {
+
+          attributes =
+            String(
+              attributes || ""
+            )
+              .replace(
+                /\/\s*$/,
+                ""
+              );
+
+
+          return (
+            "<" +
+            tag +
+            attributes +
+            "/>"
+          );
+        }
+      );
+  }
+
+
+  // ==================================================
+  // Unknown HTML named entities are invalid in XML.
+  //
+  // Keep:
+  // &amp;
+  // &lt;
+  // &gt;
+  // &quot;
+  // &apos;
+  // numeric entities
+  //
+  // Escape anything else safely.
+  // ==================================================
+
+  value =
+    value.replace(
+      /&([a-zA-Z][a-zA-Z0-9]+);/g,
+      function (
+        match,
+        name
+      ) {
+
+        var allowed =
+          {
+            amp:
+              true,
+
+            lt:
+              true,
+
+            gt:
+              true,
+
+            quot:
+              true,
+
+            apos:
+              true
+          };
+
+
+        if (
+          allowed[
+            name
+          ]
+        ) {
+
+          return match;
+        }
+
+
+        return (
+          "&amp;" +
+          name +
+          ";"
+        );
+      }
+    );
+
+
+  return value;
+}
 
 // ==================================================
 // XHTML chapter
